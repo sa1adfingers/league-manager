@@ -421,6 +421,9 @@ let STATE = {
   trending: null,
   trendingType: "add",
   transactions: null,
+  transactionsShown: 30,
+  transactionsLeagueFilter: "all",
+  transactionsTypeFilter: "all",
   exposureFilter: "",
   finderQuery: "",
   draftsByLeague: {},
@@ -809,25 +812,26 @@ window.goTrending = function () {
 window.loadTransactions = async function () {
   await withLoading(async () => {
     if (!PLAYERS) PLAYERS = await ensurePlayers(false);
-    const state = await ensureNflState();
-    const week = state.week || 1;
     const leagues = getLeagues().filter(l => !isDismissedByMe(l) && l.source !== "manual");
     let all = [];
     for (const l of leagues) {
       const data = getLeagueData(l.id);
       if (!data) continue;
-      const weeksToCheck = Array.from(new Set([week, Math.max(1, week - 1)]));
-      for (const w of weeksToCheck) {
+      // round 0 covers preseason/pre-lock moves made before the season starts;
+      // fetching through 18 regardless of the current week costs a few harmless
+      // empty-array calls for weeks that haven't happened yet.
+      for (let w = 0; w <= 18; w++) {
         try {
           const rows = await fetchJSON(`${SLEEPER}/league/${l.id}/transactions/${w}`);
           (rows || []).forEach(t => all.push(Object.assign({}, t, {
-            leagueName: l.nickname, leagueUsers: data.users, leagueRosters: data.rosters
+            leagueId: l.id, leagueName: l.nickname, leagueUsers: data.users, leagueRosters: data.rosters
           })));
-        } catch (e) { /* skip */ }
+        } catch (e) { /* skip that week */ }
       }
     }
     all.sort((a, b) => (b.created || 0) - (a.created || 0));
-    STATE.transactions = all.slice(0, 50);
+    STATE.transactions = all;
+    STATE.transactionsShown = 30;
   });
 };
 window.goTransactions = function () {
@@ -1686,16 +1690,17 @@ function waiverInfoHtml(league) {
 
 function renderTransactions() {
   const wrap = document.createElement("div");
+  const relevantLeagues = getLeagues().filter(l => l.source !== "manual" && !isDismissedByMe(l) && getLeagueData(l.id));
+
   wrap.appendChild(el(`
-    <div class="row" style="margin-top:16px; justify-content:space-between;">
-      <span class="muted" style="font-size:12px;">Latest across saved leagues (current + previous week)</span>
+    <div class="row" style="margin-top:16px; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+      <span class="muted" style="font-size:12px;">Every transaction this season, all saved leagues</span>
       <button class="btn btn-sm" onclick="loadTransactions()" ${STATE.loading?"disabled":""}>
         ${STATE.loading ? '<span class="spinner"></span>' : ''} Refresh
       </button>
     </div>
   `));
 
-  const relevantLeagues = getLeagues().filter(l => l.source !== "manual" && !isDismissedByMe(l) && getLeagueData(l.id));
   if (relevantLeagues.length > 0) {
     const panel = document.createElement("div");
     panel.className = "panel";
@@ -1712,13 +1717,48 @@ function renderTransactions() {
     wrap.appendChild(el(`<div class="empty-state"><p>Loading transactions...</p></div>`));
     return wrap;
   }
-  if (STATE.transactions.length === 0) {
-    wrap.appendChild(el(`<div class="empty-state"><p>No recent transactions found.</p></div>`));
+
+  wrap.appendChild(el(`
+    <div class="row" style="margin-bottom:12px;">
+      <select onchange="setTxLeagueFilter(this.value)">
+        <option value="all" ${STATE.transactionsLeagueFilter==='all'?"selected":""}>All leagues</option>
+        ${relevantLeagues.map(l => `<option value="${l.id}" ${STATE.transactionsLeagueFilter===l.id?"selected":""}>${escapeHtml(l.nickname)}</option>`).join("")}
+      </select>
+      <select onchange="setTxTypeFilter(this.value)">
+        <option value="all" ${STATE.transactionsTypeFilter==='all'?"selected":""}>All types</option>
+        <option value="waiver" ${STATE.transactionsTypeFilter==='waiver'?"selected":""}>Waiver</option>
+        <option value="free_agent" ${STATE.transactionsTypeFilter==='free_agent'?"selected":""}>Free agent</option>
+        <option value="trade" ${STATE.transactionsTypeFilter==='trade'?"selected":""}>Trade</option>
+      </select>
+    </div>
+  `));
+
+  const filtered = STATE.transactions.filter(t =>
+    (STATE.transactionsLeagueFilter === "all" || t.leagueId === STATE.transactionsLeagueFilter) &&
+    (STATE.transactionsTypeFilter === "all" || t.type === STATE.transactionsTypeFilter)
+  );
+
+  if (filtered.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>No transactions match that filter.</p></div>`));
     return wrap;
   }
-  STATE.transactions.forEach(t => wrap.appendChild(el(transactionCardHtml(t))));
+
+  const shown = filtered.slice(0, STATE.transactionsShown);
+  shown.forEach(t => wrap.appendChild(el(transactionCardHtml(t))));
+
+  if (filtered.length > shown.length) {
+    wrap.appendChild(el(`
+      <div class="row" style="justify-content:center; margin-top:10px;">
+        <button class="btn btn-sm" onclick="showMoreTransactions()">Show more (${filtered.length - shown.length} left)</button>
+      </div>
+    `));
+  }
+
   return wrap;
 }
+window.setTxLeagueFilter = function (v) { STATE.transactionsLeagueFilter = v; STATE.transactionsShown = 30; render(); };
+window.setTxTypeFilter = function (v) { STATE.transactionsTypeFilter = v; STATE.transactionsShown = 30; render(); };
+window.showMoreTransactions = function () { STATE.transactionsShown += 30; render(); };
 
 /* =========================================================
    RENDER: LIVE DRAFT
@@ -2188,6 +2228,9 @@ window.navigate = navigate;
 /* boot */
 render();
 if (getCloudConfig()) { pullCloudNow(); }
+if (getLeagues().filter(l => l.source !== "manual").length > 0) {
+  setTimeout(() => { if (!STATE.transactions) loadTransactions(); }, 300);
+}
 </script>
 </body>
 </html>
