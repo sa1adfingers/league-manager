@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+<title>League Manager</title>
+<style>
+  :root {
+    --bg: #101c16;
+    --panel: #16261e;
+    --card: #1d3025;
+    --card-hover: #24392c;
+    --line: #2c4436;
+    --text: #eae7da;
+    --text-dim: #93a89a;
+    --text-faint: #5f7568;
+    --gold: #d7a53e;
+    --win: #5fa37a;
+    --loss: #c1503f;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  #app { max-width: 1080px; margin: 0 auto; padding: 18px 18px 60px; }
+
+  .yardline {
+    height: 6px;
+    background: repeating-linear-gradient(115deg, var(--line) 0px, var(--line) 2px, transparent 2px, transparent 14px);
+    opacity: 0.6;
+    margin: 14px 0;
+    border-radius: 2px;
+  }
+
+  /* header / nav */
+  .topbar { display:flex; align-items:flex-end; justify-content:space-between; flex-wrap:wrap; gap:10px; }
+  .brand-eyebrow { font-size:11px; letter-spacing:0.18em; color:var(--gold); font-weight:700; }
+  .brand-title { margin:2px 0 0; font-size:26px; font-weight:800; letter-spacing:-0.01em; }
+  .nav { display:flex; gap:4px; margin-top:16px; flex-wrap:wrap; }
+  .nav-btn {
+    background:none; border:none; color:var(--text-faint); font-size:13px; font-weight:700;
+    letter-spacing:0.03em; padding:8px 4px; cursor:pointer; border-bottom:2px solid transparent; margin-right:16px;
+  }
+  .nav-btn.active { color:var(--text); border-bottom-color:var(--gold); }
+
+  /* buttons / inputs */
+  .btn {
+    display:inline-flex; align-items:center; gap:6px; padding:9px 14px; border-radius:8px;
+    border:1px solid var(--line); background:var(--card); color:var(--text); font-size:13px;
+    font-weight:600; cursor:pointer; white-space:nowrap;
+  }
+  .btn:hover { background:var(--card-hover); }
+  .btn:disabled { opacity:0.5; cursor:default; }
+  .btn-primary { background:var(--gold); border-color:var(--gold); color:#1a1305; }
+  .btn-primary:hover { background:#e2b34e; }
+  .btn-danger { color:var(--loss); }
+  .btn-sm { padding:6px 10px; font-size:12px; }
+  input[type=text], select {
+    background:var(--panel); border:1px solid var(--line); color:var(--text);
+    padding:10px 12px; border-radius:8px; font-size:14px; outline:none;
+  }
+  input[type=text]:focus, select:focus { border-color: var(--gold); }
+  input::placeholder { color: var(--text-faint); }
+
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .banner-error {
+    display:flex; align-items:center; gap:8px; color:var(--loss); font-size:13px;
+    background:rgba(193,80,63,0.1); border:1px solid rgba(193,80,63,0.35); padding:8px 12px;
+    border-radius:8px; margin-top:12px;
+  }
+  .muted { color: var(--text-faint); }
+  .mono { font-family: ui-monospace, "SF Mono", Consolas, monospace; }
+
+  /* dashboard cards */
+  .league-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(260px,1fr)); gap:14px; margin-top:16px; }
+  .league-card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; cursor:pointer; }
+  .league-card:hover { border-color: var(--gold); }
+  .league-card-title { font-weight:700; font-size:15px; margin-bottom:2px; }
+  .league-card-sub { font-size:11px; color:var(--text-faint); margin-bottom:10px; }
+  .league-card-row { display:flex; justify-content:space-between; font-size:12.5px; padding:3px 0; border-top:1px solid var(--line); }
+  .league-card-actions { display:flex; gap:6px; margin-top:10px; }
+  .empty-state { text-align:center; color:var(--text-faint); padding:60px 20px; }
+
+  /* tabs / panel */
+  .tabs { display:flex; align-items:center; gap:4px; margin: 16px 0 14px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  table { width:100%; border-collapse:collapse; }
+  thead th { text-align:left; font-size:11px; letter-spacing:0.08em; color:var(--text-faint); padding:10px 14px; border-bottom:1px solid var(--line); font-weight:700; }
+  .num { text-align:right !important; }
+  tbody tr:nth-child(odd) { background: rgba(255,255,255,0.015); }
+  tbody td { padding:10px 14px; font-size:14px; border-bottom:1px solid var(--line); }
+  .rank { color:var(--gold); font-weight:800; font-family: ui-monospace, monospace; }
+
+  /* roster cards */
+  .roster-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(260px,1fr)); gap:14px; }
+  .rcard { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .rcard-head { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:10px; border-bottom:1px solid var(--line); padding-bottom:8px; }
+  .rcard-title { font-weight:700; font-size:14px; }
+  .rcard-count { font-size:11px; color:var(--text-faint); }
+  .rcard-section { margin-bottom:10px; }
+  .rcard-section:last-child { margin-bottom:0; }
+  .rcard-section-label { font-size:10px; letter-spacing:0.1em; color:var(--text-faint); font-weight:700; margin-bottom:6px; }
+  .prow { display:flex; align-items:center; gap:6px; font-size:12.5px; padding:3px 0; }
+  .prow.empty { opacity:0.55; }
+  .slot-tag { font-size:9.5px; font-weight:700; color:var(--text-faint); width:28px; flex-shrink:0; font-family: ui-monospace, monospace; }
+  .pname { flex:1; }
+  .pbadge { font-size:9.5px; font-weight:800; color:#10160e; padding:1px 6px; border-radius:4px; letter-spacing:0.02em; }
+  .pteam { font-size:10px; color:var(--text-faint); width:26px; text-align:right; font-family: ui-monospace, monospace; }
+
+  /* finder */
+  .finder-result { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px; }
+  .finder-player-name { font-weight:700; font-size:14px; }
+  .finder-hit { display:flex; justify-content:space-between; font-size:12.5px; padding:4px 0; border-top:1px solid var(--line); margin-top:6px; }
+
+  /* compare */
+  .compare-grid { display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
+  @media (max-width:680px) { .compare-grid { grid-template-columns: 1fr; } }
+  .compare-picker { display:flex; flex-direction:column; gap:6px; margin-bottom:10px; }
+
+  .spin { display:inline-block; animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  @media (max-width:520px) {
+    #app { padding:14px 12px 40px; }
+    .brand-title { font-size:21px; }
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+/* =========================================================
+   STORAGE
+========================================================= */
+const STORE_PREFIX = "slm.";
+const DB = {
+  get(key, fallback) {
+    try {
+      const raw = localStorage.getItem(STORE_PREFIX + key);
+      return raw ? JSON.parse(raw) : fallback;
+    } catch (e) { return fallback; }
+  },
+  set(key, value) {
+    try {
+      localStorage.setItem(STORE_PREFIX + key, JSON.stringify(value));
+      return true;
+    } catch (e) {
+      console.error("Storage write failed", e);
+      return false;
+    }
+  },
+  remove(key) { localStorage.removeItem(STORE_PREFIX + key); }
+};
+
+function getLeagues() { return DB.get("leagues", []); }
+function saveLeagues(list) { DB.set("leagues", list); }
+function getLeagueData(id) { return DB.get("league." + id, null); }
+function saveLeagueData(id, data) { DB.set("league." + id, data); }
+function removeLeagueData(id) { DB.remove("league." + id); }
+function getPlayersCache() { return DB.get("players", null); }
+function savePlayersCache(obj) { DB.set("players", obj); }
+
+/* =========================================================
+   SLEEPER API
+========================================================= */
+const SLEEPER = "https://api.sleeper.app/v1";
+
+async function fetchJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Sleeper API error (" + res.status + ")");
+  return res.json();
+}
+
+async function syncLeagueData(leagueId) {
+  const [league, rosters, users] = await Promise.all([
+    fetchJSON(`${SLEEPER}/league/${leagueId}`),
+    fetchJSON(`${SLEEPER}/league/${leagueId}/rosters`),
+    fetchJSON(`${SLEEPER}/league/${leagueId}/users`),
+  ]);
+  if (!league) throw new Error("No league found for that ID.");
+  const data = { league, rosters: rosters || [], users: users || [], syncedAt: Date.now() };
+  saveLeagueData(leagueId, data);
+  return data;
+}
+
+const PLAYERS_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+async function ensurePlayers(force) {
+  const cached = getPlayersCache();
+  if (cached && !force && (Date.now() - cached.updatedAt) < PLAYERS_MAX_AGE_MS) {
+    return cached.map;
+  }
+  const data = await fetchJSON(`${SLEEPER}/players/nfl`);
+  const trimmed = {};
+  for (const id in data) {
+    const p = data[id];
+    trimmed[id] = {
+      first_name: p.first_name, last_name: p.last_name,
+      position: p.position, fantasy_positions: p.fantasy_positions,
+      team: p.team, status: p.status
+    };
+  }
+  const payload = { updatedAt: Date.now(), map: trimmed };
+  const ok = savePlayersCache(payload);
+  if (!ok && cached) return cached.map; // storage full — fall back to whatever we had
+  return trimmed;
+}
+
+/* =========================================================
+   DOMAIN HELPERS
+========================================================= */
+const POS_COLOR = {
+  QB: "#6b8fc4", RB: "#6fae6f", WR: "#b06fae", TE: "#c98f4a", K: "#7d8a94", DEF: "#7d8a94",
+  DL: "#c1503f", "DL-EDGE": "#c1503f", "DL-DT": "#8f3a2e",
+  LB: "#d7a53e",
+  DB: "#3f9ba8", "DB-CB": "#3f9ba8", "DB-S": "#2c6e78", "DB-NB": "#5fc2cf",
+};
+
+function subType(p) {
+  if (!p) return null;
+  const fp = (p.fantasy_positions && p.fantasy_positions[0]) || p.position;
+  const pos = (p.position || "").toUpperCase();
+  if (fp === "DL") {
+    if (pos === "DE" || pos === "EDGE") return "EDGE";
+    if (pos === "DT" || pos === "NT") return "DT";
+    return null;
+  }
+  if (fp === "DB") {
+    if (pos === "CB") return "CB";
+    if (["S","SS","FS"].includes(pos)) return "S";
+    if (["NB","NCB"].includes(pos)) return "NB";
+    return null;
+  }
+  return null;
+}
+function badgeInfo(p) {
+  const fp = (p && (p.fantasy_positions?.[0] || p.position)) || "?";
+  const st = subType(p);
+  const key = st ? `${fp}-${st}` : fp;
+  return { label: st || fp, color: POS_COLOR[key] || POS_COLOR[fp] || "#5f7568" };
+}
+function playerName(p, id) {
+  if (!p) return id;
+  return (`${p.first_name || ""} ${p.last_name || ""}`).trim() || id;
+}
+function teamLabel(roster, users) {
+  const owner = users.find(u => u.user_id === roster.owner_id);
+  const metaName = owner?.metadata?.team_name;
+  if (metaName && metaName.trim()) return metaName.trim();
+  if (owner?.display_name) return owner.display_name;
+  return `Roster ${roster.roster_id}`;
+}
+function computeStandings(rosters, users) {
+  const rows = rosters.map(r => {
+    const s = r.settings || {};
+    const pf = (s.fpts || 0) + (s.fpts_decimal || 0) / 100;
+    const pa = (s.fpts_against || 0) + (s.fpts_against_decimal || 0) / 100;
+    return { rosterId: r.roster_id, name: teamLabel(r, users), wins: s.wins||0, losses: s.losses||0, ties: s.ties||0, pf, pa, raw: r };
+  });
+  rows.sort((a,b) => b.wins !== a.wins ? b.wins - a.wins : b.pf - a.pf);
+  return rows;
+}
+function starterSlots(league) {
+  if (!league?.roster_positions) return [];
+  return league.roster_positions.filter(p => !["BN","IR","TAXI"].includes(p));
+}
+function fmtTime(ts) {
+  if (!ts) return "never";
+  const d = new Date(ts);
+  return d.toLocaleDateString([], {month:"short", day:"numeric"}) + " " + d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+}
+
+/* =========================================================
+   APP STATE + ROUTER
+========================================================= */
+let PLAYERS = getPlayersCache()?.map || null;
+let STATE = {
+  route: "dashboard",
+  leagueId: null,
+  tab: "standings",
+  rosterFilter: "",
+  compareA: { leagueId: null, rosterId: null },
+  compareB: { leagueId: null, rosterId: null },
+  loading: false,
+  error: null,
+};
+
+function setState(patch) { Object.assign(STATE, patch); render(); }
+function navigate(route, extra) { setState(Object.assign({ route, error: null }, extra || {})); }
+
+function el(html) {
+  const t = document.createElement("template");
+  t.innerHTML = html.trim();
+  return t.content;
+}
+
+async function withLoading(fn) {
+  setState({ loading: true, error: null });
+  try { await fn(); }
+  catch (e) { setState({ loading: false, error: e.message || "Something went wrong." }); return; }
+  setState({ loading: false });
+}
+
+/* -------- actions exposed to inline handlers -------- */
+window.addLeague = async function () {
+  const input = document.getElementById("add-league-input");
+  const id = (input.value || "").trim();
+  if (!id) return;
+  await withLoading(async () => {
+    const data = await syncLeagueData(id);
+    if (!PLAYERS) PLAYERS = await ensurePlayers(false);
+    const leagues = getLeagues();
+    if (!leagues.find(l => l.id === id)) {
+      leagues.push({ id, nickname: data.league.name || id, addedAt: Date.now() });
+      saveLeagues(leagues);
+    }
+    input.value = "";
+    navigate("league", { leagueId: id, tab: "standings" });
+  });
+};
+
+window.syncOne = async function (id) {
+  await withLoading(async () => { await syncLeagueData(id); });
+};
+
+window.syncAll = async function () {
+  await withLoading(async () => {
+    const leagues = getLeagues();
+    for (const l of leagues) { await syncLeagueData(l.id); }
+    PLAYERS = await ensurePlayers(false);
+  });
+};
+
+window.refreshPlayers = async function () {
+  await withLoading(async () => { PLAYERS = await ensurePlayers(true); });
+};
+
+window.removeLeague = function (id) {
+  if (!confirm("Remove this league from League Manager? Local data for it will be deleted.")) return;
+  const leagues = getLeagues().filter(l => l.id !== id);
+  saveLeagues(leagues);
+  removeLeagueData(id);
+  navigate("dashboard");
+};
+
+window.renameLeague = function (id) {
+  const leagues = getLeagues();
+  const l = leagues.find(x => x.id === id);
+  if (!l) return;
+  const name = prompt("Nickname for this league:", l.nickname);
+  if (name === null) return;
+  l.nickname = name.trim() || l.nickname;
+  saveLeagues(leagues);
+  render();
+};
+
+window.openLeague = function (id) { navigate("league", { leagueId: id, tab: "standings" }); };
+window.setTab = function (tab) { setState({ tab }); };
+window.setRosterFilter = function (v) { STATE.rosterFilter = v; renderRosterGridOnly(); };
+
+let searchDebounce = null;
+window.onFinderInput = function (v) {
+  clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(() => { STATE.finderQuery = v; render(); }, 150);
+};
+
+window.onCompareChange = function (side, field, value) {
+  STATE[side === "a" ? "compareA" : "compareB"][field] = value || null;
+  if (field === "leagueId") STATE[side === "a" ? "compareA" : "compareB"].rosterId = null;
+  render();
+};
+
+/* =========================================================
+   RENDER: SHELL
+========================================================= */
+function render() {
+  const app = document.getElementById("app");
+  app.innerHTML = "";
+  app.appendChild(renderHeader());
+  app.appendChild(el(`<div class="yardline"></div>`));
+  if (STATE.error) app.appendChild(el(`<div class="banner-error">⚠ ${escapeHtml(STATE.error)}</div>`));
+
+  let body;
+  if (STATE.route === "dashboard") body = renderDashboard();
+  else if (STATE.route === "league") body = renderLeagueDetail();
+  else if (STATE.route === "finder") body = renderFinder();
+  else if (STATE.route === "compare") body = renderCompare();
+  else body = renderDashboard();
+
+  app.appendChild(body);
+}
+
+function renderHeader() {
+  const leagues = getLeagues();
+  return el(`
+    <div>
+      <div class="topbar">
+        <div>
+          <div class="brand-eyebrow">SLEEPER SYNC</div>
+          <h1 class="brand-title">League Manager</h1>
+        </div>
+        <div class="row">
+          ${leagues.length > 0 ? `<button class="btn btn-sm" onclick="syncAll()" ${STATE.loading?"disabled":""}>${STATE.loading ? '<span class="spin">⟳</span>' : '⟳'} Sync all</button>` : ""}
+        </div>
+      </div>
+      <div class="nav">
+        <button class="nav-btn ${STATE.route==='dashboard'?'active':''}" onclick="navigate('dashboard')">Dashboard</button>
+        <button class="nav-btn ${STATE.route==='finder'?'active':''}" onclick="navigate('finder')">Player Finder</button>
+        <button class="nav-btn ${STATE.route==='compare'?'active':''}" onclick="navigate('compare')">Compare Rosters</button>
+      </div>
+    </div>
+  `);
+}
+
+/* =========================================================
+   RENDER: DASHBOARD
+========================================================= */
+function renderDashboard() {
+  const leagues = getLeagues();
+  const wrap = document.createElement("div");
+
+  wrap.appendChild(el(`
+    <div class="row" style="margin-top:16px;">
+      <input id="add-league-input" type="text" placeholder="Paste a Sleeper league ID…" style="flex:1; min-width:220px;"
+        onkeydown="if(event.key==='Enter') addLeague()" />
+      <button class="btn btn-primary" onclick="addLeague()" ${STATE.loading?"disabled":""}>
+        ${STATE.loading ? '<span class="spin">⟳</span>' : '+'} Add league
+      </button>
+    </div>
+  `));
+
+  if (leagues.length === 0) {
+    wrap.appendChild(el(`
+      <div class="empty-state">
+        <p>No leagues saved yet.</p>
+        <p class="muted">Paste a Sleeper league ID above — find it in your league's URL on sleeper.com.</p>
+      </div>
+    `));
+    return wrap;
+  }
+
+  const grid = document.createElement("div");
+  grid.className = "league-grid";
+  leagues.forEach(l => {
+    const data = getLeagueData(l.id);
+    const standings = data ? computeStandings(data.rosters, data.users) : [];
+    const top = standings[0];
+    grid.appendChild(el(`
+      <div class="league-card" onclick="openLeague('${l.id}')">
+        <div class="league-card-title">${escapeHtml(l.nickname)}</div>
+        <div class="league-card-sub">${data ? escapeHtml(data.league.season) + " · " + data.rosters.length + " teams" : "Not synced yet"}</div>
+        ${top ? `<div class="league-card-row"><span>Leader</span><span>${escapeHtml(top.name)} (${top.wins}-${top.losses}${top.ties?`-${top.ties}`:""})</span></div>` : ""}
+        <div class="league-card-row"><span>Last synced</span><span class="mono">${fmtTime(data?.syncedAt)}</span></div>
+        <div class="league-card-actions" onclick="event.stopPropagation()">
+          <button class="btn btn-sm" onclick="syncOne('${l.id}')">⟳ Sync</button>
+          <button class="btn btn-sm" onclick="renameLeague('${l.id}')">Rename</button>
+          <button class="btn btn-sm btn-danger" onclick="removeLeague('${l.id}')">Remove</button>
+        </div>
+      </div>
+    `));
+  });
+  wrap.appendChild(grid);
+
+  const pc = getPlayersCache();
+  wrap.appendChild(el(`
+    <div class="row" style="margin-top:18px; justify-content:space-between;">
+      <span class="muted mono" style="font-size:11px;">Player database updated ${fmtTime(pc?.updatedAt)}</span>
+      <button class="btn btn-sm" onclick="refreshPlayers()">Refresh player DB</button>
+    </div>
+  `));
+
+  return wrap;
+}
+
+/* =========================================================
+   RENDER: LEAGUE DETAIL
+========================================================= */
+function renderLeagueDetail() {
+  const wrap = document.createElement("div");
+  const leagues = getLeagues();
+  const meta = leagues.find(l => l.id === STATE.leagueId);
+  const data = getLeagueData(STATE.leagueId);
+
+  if (!data) {
+    wrap.appendChild(el(`<div class="empty-state"><p>No data for this league yet.</p>
+      <button class="btn btn-primary" onclick="syncOne('${STATE.leagueId}')">Sync now</button></div>`));
+    return wrap;
+  }
+
+  wrap.appendChild(el(`
+    <div class="row" style="margin-top:16px; justify-content:space-between;">
+      <div>
+        <div style="font-weight:800; font-size:18px;">${escapeHtml(meta?.nickname || data.league.name)}</div>
+        <div class="muted" style="font-size:12px;">${escapeHtml(data.league.season)} · synced ${fmtTime(data.syncedAt)}</div>
+      </div>
+      <div class="row">
+        <button class="btn btn-sm" onclick="syncOne('${STATE.leagueId}')" ${STATE.loading?"disabled":""}>
+          ${STATE.loading ? '<span class="spin">⟳</span>' : '⟳'} Sync
+        </button>
+        <button class="btn btn-sm" onclick="navigate('dashboard')">← Dashboard</button>
+      </div>
+    </div>
+  `));
+
+  wrap.appendChild(el(`
+    <div class="tabs">
+      <button class="nav-btn ${STATE.tab==='standings'?'active':''}" onclick="setTab('standings')">Standings</button>
+      <button class="nav-btn ${STATE.tab==='rosters'?'active':''}" onclick="setTab('rosters')">Rosters</button>
+    </div>
+  `));
+
+  if (STATE.tab === "standings") {
+    const standings = computeStandings(data.rosters, data.users);
+    const table = document.createElement("div");
+    table.className = "panel";
+    table.innerHTML = `
+      <table>
+        <thead><tr><th style="width:32px;">#</th><th>Team</th><th class="num">Record</th><th class="num">PF</th><th class="num">PA</th></tr></thead>
+        <tbody>
+          ${standings.map((row,i) => `
+            <tr>
+              <td class="rank">${i+1}</td>
+              <td style="font-weight:600;">${escapeHtml(row.name)}</td>
+              <td class="num mono">${row.wins}-${row.losses}${row.ties?`-${row.ties}`:""}</td>
+              <td class="num mono">${row.pf.toFixed(2)}</td>
+              <td class="num mono muted">${row.pa.toFixed(2)}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+    wrap.appendChild(table);
+  } else {
+    wrap.appendChild(el(`
+      <input type="text" placeholder="Filter by team name…" style="width:100%; margin-bottom:14px;"
+        oninput="setRosterFilter(this.value)" value="${escapeHtml(STATE.rosterFilter)}" />
+    `));
+    const grid = document.createElement("div");
+    grid.className = "roster-grid";
+    grid.id = "roster-grid";
+    grid.innerHTML = rosterGridHtml(data);
+    wrap.appendChild(grid);
+  }
+
+  return wrap;
+}
+
+function renderRosterGridOnly() {
+  const grid = document.getElementById("roster-grid");
+  if (!grid) return;
+  const data = getLeagueData(STATE.leagueId);
+  grid.innerHTML = rosterGridHtml(data);
+}
+
+function rosterGridHtml(data) {
+  const q = (STATE.rosterFilter || "").toLowerCase();
+  const slots = starterSlots(data.league);
+  return data.rosters
+    .filter(r => !q || teamLabel(r, data.users).toLowerCase().includes(q))
+    .map(r => rosterCardHtml(r, data.users, slots))
+    .join("");
+}
+
+function rosterCardHtml(roster, users, slots) {
+  const starters = roster.starters || [];
+  const reserve = roster.reserve || [];
+  const taxi = roster.taxi || [];
+  const all = roster.players || [];
+  const bench = all.filter(id => !starters.includes(id) && !reserve.includes(id) && !taxi.includes(id));
+
+  const row = (id, idx, showSlot) => {
+    if (!id || id === "0") {
+      return `<div class="prow empty"><span class="slot-tag">${slots[idx]||"—"}</span><span class="pname muted">Empty</span></div>`;
+    }
+    const p = PLAYERS ? PLAYERS[id] : null;
+    const badge = badgeInfo(p);
+    return `<div class="prow">
+      ${showSlot ? `<span class="slot-tag">${slots[idx]||badge.label}</span>` : ""}
+      <span class="pname">${escapeHtml(playerName(p, id))}</span>
+      <span class="pbadge" style="background:${badge.color}">${badge.label}</span>
+      ${p?.team ? `<span class="pteam">${p.team}</span>` : ""}
+    </div>`;
+  };
+
+  return `
+    <div class="rcard">
+      <div class="rcard-head">
+        <span class="rcard-title">${escapeHtml(teamLabel(roster, users))}</span>
+        <span class="rcard-count">${all.length} rostered</span>
+      </div>
+      <div class="rcard-section">
+        <div class="rcard-section-label">Starters</div>
+        ${starters.map((id,idx) => row(id, idx, true)).join("")}
+      </div>
+      ${bench.length ? `<div class="rcard-section"><div class="rcard-section-label">Bench</div>${bench.map(id=>row(id,null,false)).join("")}</div>` : ""}
+      ${taxi.length ? `<div class="rcard-section"><div class="rcard-section-label">Taxi</div>${taxi.map(id=>row(id,null,false)).join("")}</div>` : ""}
+      ${reserve.length ? `<div class="rcard-section"><div class="rcard-section-label">IR</div>${reserve.map(id=>row(id,null,false)).join("")}</div>` : ""}
+    </div>`;
+}
+
+/* =========================================================
+   RENDER: PLAYER FINDER (cross-league)
+========================================================= */
+function renderFinder() {
+  const wrap = document.createElement("div");
+  wrap.appendChild(el(`
+    <div style="margin-top:16px;">
+      <input type="text" placeholder="Search a player across every saved league…" style="width:100%;"
+        oninput="onFinderInput(this.value)" />
+    </div>
+  `));
+
+  const q = (STATE.finderQuery || "").trim().toLowerCase();
+  if (!q) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Type a name to see who owns them across your leagues.</p></div>`));
+    return wrap;
+  }
+
+  const leagues = getLeagues();
+  // playerId -> { name, badge, hits: [{leagueName, leagueId, teamName, status}] }
+  const hitsByPlayer = {};
+
+  leagues.forEach(l => {
+    const data = getLeagueData(l.id);
+    if (!data) return;
+    data.rosters.forEach(r => {
+      const all = r.players || [];
+      const starters = r.starters || [];
+      all.forEach(id => {
+        const p = PLAYERS ? PLAYERS[id] : null;
+        const name = playerName(p, id);
+        if (!name.toLowerCase().includes(q)) return;
+        if (!hitsByPlayer[id]) hitsByPlayer[id] = { name, badge: badgeInfo(p), hits: [] };
+        hitsByPlayer[id].hits.push({
+          leagueName: l.nickname,
+          teamName: teamLabel(r, data.users),
+          status: starters.includes(id) ? "Starter" : "Bench",
+        });
+      });
+    });
+  });
+
+  const ids = Object.keys(hitsByPlayer);
+  if (ids.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>No matches in your saved leagues.</p></div>`));
+    return wrap;
+  }
+
+  ids.forEach(id => {
+    const entry = hitsByPlayer[id];
+    const card = el(`
+      <div class="finder-result">
+        <div class="row" style="justify-content:space-between;">
+          <span class="finder-player-name">${escapeHtml(entry.name)}</span>
+          <span class="pbadge" style="background:${entry.badge.color}">${entry.badge.label}</span>
+        </div>
+        ${entry.hits.map(h => `
+          <div class="finder-hit">
+            <span>${escapeHtml(h.leagueName)} — ${escapeHtml(h.teamName)}</span>
+            <span class="muted">${h.status}</span>
+          </div>`).join("")}
+      </div>
+    `);
+    wrap.appendChild(card);
+  });
+
+  return wrap;
+}
+
+/* =========================================================
+   RENDER: COMPARE ROSTERS
+========================================================= */
+function renderCompare() {
+  const wrap = document.createElement("div");
+  const leagues = getLeagues();
+
+  if (leagues.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Add at least one league to compare rosters.</p></div>`));
+    return wrap;
+  }
+
+  wrap.appendChild(el(`<div style="margin-top:16px;"></div>`));
+  const grid = document.createElement("div");
+  grid.className = "compare-grid";
+  grid.appendChild(comparePickerHtml("a", STATE.compareA, leagues));
+  grid.appendChild(comparePickerHtml("b", STATE.compareB, leagues));
+  wrap.appendChild(grid);
+
+  return wrap;
+}
+
+function comparePickerHtml(side, state, leagues) {
+  const data = state.leagueId ? getLeagueData(state.leagueId) : null;
+  const slots = data ? starterSlots(data.league) : [];
+  const roster = data && state.rosterId ? data.rosters.find(r => String(r.roster_id) === String(state.rosterId)) : null;
+
+  const container = document.createElement("div");
+  const leagueOptions = `<option value="">Select a league…</option>` +
+    leagues.map(l => `<option value="${l.id}" ${state.leagueId===l.id?"selected":""}>${escapeHtml(l.nickname)}</option>`).join("");
+  const teamOptions = data ? `<option value="">Select a team…</option>` +
+    data.rosters.map(r => `<option value="${r.roster_id}" ${String(state.rosterId)===String(r.roster_id)?"selected":""}>${escapeHtml(teamLabel(r, data.users))}</option>`).join("") : "";
+
+  container.innerHTML = `
+    <div class="compare-picker">
+      <select onchange="onCompareChange('${side}','leagueId', this.value)">${leagueOptions}</select>
+      ${data ? `<select onchange="onCompareChange('${side}','rosterId', this.value)">${teamOptions}</select>` : ""}
+    </div>
+    <div>${roster ? rosterCardHtml(roster, data.users, slots) : ""}</div>
+  `;
+  return container;
+}
+
+/* =========================================================
+   UTIL
+========================================================= */
+function escapeHtml(str) {
+  return String(str ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+}
+window.navigate = navigate;
+
+/* boot */
+render();
+</script>
+</body>
+</html>
