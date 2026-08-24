@@ -225,13 +225,15 @@ async function cloudPullLeagues() {
   const rows = await cloudFetch("leagues?select=*");
   return (rows || []).map(r => ({
     id: r.id, nickname: r.nickname, addedAt: r.added_at, teams: r.teams || {},
-    source: r.source || "sleeper", manualData: r.manual_data || null
+    source: r.source || "sleeper", manualData: r.manual_data || null,
+    waiverSchedule: r.waiver_schedule || ""
   }));
 }
 async function cloudUpsertLeague(l) {
   const body = {
     id: l.id, nickname: l.nickname, added_at: l.addedAt || Date.now(),
-    teams: l.teams || {}, source: l.source || "sleeper"
+    teams: l.teams || {}, source: l.source || "sleeper",
+    waiver_schedule: l.waiverSchedule || ""
   };
   if (l.source === "manual") {
     body.manual_data = getLeagueData(l.id) || null; // manual leagues have no other source to re-sync from
@@ -812,15 +814,19 @@ window.goTrending = function () {
 window.loadTransactions = async function () {
   await withLoading(async () => {
     if (!PLAYERS) PLAYERS = await ensurePlayers(false);
+    const state = await ensureNflState();
+    const currentWeek = state.week || 1;
+    // round 0 covers preseason/pre-lock moves - only worth checking near the
+    // start of the season, since anything from back then is stale by now anyway.
+    const roundsToCheck = new Set([currentWeek, Math.max(0, currentWeek - 1)]);
+    if (currentWeek <= 2) roundsToCheck.add(0);
+
     const leagues = getLeagues().filter(l => !isDismissedByMe(l) && l.source !== "manual");
     let all = [];
     for (const l of leagues) {
       const data = getLeagueData(l.id);
       if (!data) continue;
-      // round 0 covers preseason/pre-lock moves made before the season starts;
-      // fetching through 18 regardless of the current week costs a few harmless
-      // empty-array calls for weeks that haven't happened yet.
-      for (let w = 0; w <= 18; w++) {
+      for (const w of roundsToCheck) {
         try {
           const rows = await fetchJSON(`${SLEEPER}/league/${l.id}/transactions/${w}`);
           (rows || []).forEach(t => all.push(Object.assign({}, t, {
@@ -829,6 +835,8 @@ window.loadTransactions = async function () {
         } catch (e) { /* skip that week */ }
       }
     }
+    const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
+    all = all.filter(t => !t.created || t.created >= cutoff);
     all.sort((a, b) => (b.created || 0) - (a.created || 0));
     STATE.transactions = all;
     STATE.transactionsShown = 30;
@@ -1676,17 +1684,45 @@ function waiverInfoHtml(league) {
   if (!data) return "";
   const s = data.league.settings || {};
   const parts = [];
-  if (s.waiver_budget) parts.push(`FAAB budget $${s.waiver_budget}`);
+  const myRosterId = myTeamFor(league);
+  if (s.waiver_budget) {
+    const myRoster = myRosterId ? data.rosters.find(r => String(r.roster_id) === String(myRosterId)) : null;
+    if (myRoster) {
+      const used = (myRoster.settings && myRoster.settings.waiver_budget_used) || 0;
+      parts.push(`Current FAAB $${s.waiver_budget - used}`);
+    } else {
+      parts.push(`FAAB budget $${s.waiver_budget} (set "My team" to see your remaining)`);
+    }
+  }
   if (s.trade_deadline) parts.push(`Trade deadline Week ${s.trade_deadline}`);
+  const scheduleId = `waiver-sched-${league.id}`;
   return `
-    <div class="row" style="justify-content:space-between; padding:7px 0; border-top:1px solid var(--line); flex-wrap:wrap;">
+    <div style="padding:7px 0; border-top:1px solid var(--line);">
       <div style="font-size:11.5px;">
         <span style="font-weight:700;">${escapeHtml(league.nickname)}</span>
         ${parts.length ? `<span class="muted"> - ${parts.join(" | ")}</span>` : ""}
       </div>
-      <a href="https://sleeper.com/leagues/${league.id}" target="_blank" rel="noopener" class="btn btn-sm">Waiver settings on Sleeper</a>
+      <div class="row" style="margin-top:5px; gap:6px;">
+        <input id="${scheduleId}" type="text" placeholder="Waiver day/time (e.g. Wed 8:00 PM ET)" value="${escapeHtml(league.waiverSchedule || "")}" style="flex:1; min-width:180px; font-size:11.5px; padding:6px 8px;" />
+        <button class="btn btn-sm" onclick="saveWaiverSchedule('${league.id}')">Save</button>
+      </div>
     </div>`;
 }
+
+window.saveWaiverSchedule = async function (leagueId) {
+  const input = document.getElementById(`waiver-sched-${leagueId}`);
+  if (!input) return;
+  const value = input.value.trim();
+  const leagues = getLeagues();
+  const l = leagues.find(x => x.id === leagueId);
+  if (!l) return;
+  l.waiverSchedule = value;
+  saveLeagues(leagues);
+  if (getCloudConfig()) {
+    try { await cloudUpsertLeague(l); } catch (e) { console.error("Cloud push failed", e); }
+  }
+  render();
+};
 
 function renderTransactions() {
   const wrap = document.createElement("div");
@@ -1694,7 +1730,7 @@ function renderTransactions() {
 
   wrap.appendChild(el(`
     <div class="row" style="margin-top:16px; justify-content:space-between; flex-wrap:wrap; gap:8px;">
-      <span class="muted" style="font-size:12px;">Every transaction this season, all saved leagues</span>
+      <span class="muted" style="font-size:12px;">Last 2 weeks, all saved leagues</span>
       <button class="btn btn-sm" onclick="loadTransactions()" ${STATE.loading?"disabled":""}>
         ${STATE.loading ? '<span class="spinner"></span>' : ''} Refresh
       </button>
@@ -2011,22 +2047,43 @@ function rosterOwnerName(rosterId, rosters, users) {
   const r = rosters.find(x => x.roster_id === rosterId);
   return r ? teamLabel(r, users) : `Roster ${rosterId}`;
 }
+window.viewPlayerOwnership = function (name) {
+  STATE.finderQuery = name;
+  navigate("finder");
+};
+
+function transactionPlayerRow(pid, rosterId, t, sign) {
+  const p = PLAYERS ? PLAYERS[pid] : null;
+  const name = playerName(p, pid);
+  const badge = badgeInfo(p);
+  const color = sign === "+" ? "var(--win)" : "var(--loss)";
+  return `
+    <div class="prow" style="flex-wrap:wrap;">
+      <span style="color:${color};">${sign} ${escapeHtml(name)}</span>
+      <span class="pbadge" style="background:${badge.color};">${badge.label}</span>
+      ${p?.team ? `<span class="muted mono" style="font-size:10px;">${escapeHtml(p.team)}</span>` : ""}
+      <button class="btn btn-sm" style="padding:2px 8px; font-size:10.5px;" onclick="viewPlayerOwnership('${name.replace(/'/g, "\\'")}')">View ownership</button>
+      <span class="muted" style="margin-left:auto; font-size:11px;">${escapeHtml(rosterOwnerName(rosterId, t.leagueRosters, t.leagueUsers))}</span>
+    </div>`;
+}
+
 function transactionCardHtml(t) {
   const adds = t.adds || {};
   const drops = t.drops || {};
-  const addRows = Object.keys(adds).map(pid => {
-    const p = PLAYERS ? PLAYERS[pid] : null;
-    return `<div class="prow"><span style="color:var(--win);">+ ${escapeHtml(playerName(p, pid))}</span><span class="muted" style="margin-left:auto; font-size:11px;">${escapeHtml(rosterOwnerName(adds[pid], t.leagueRosters, t.leagueUsers))}</span></div>`;
-  });
-  const dropRows = Object.keys(drops).map(pid => {
-    const p = PLAYERS ? PLAYERS[pid] : null;
-    return `<div class="prow"><span style="color:var(--loss);">- ${escapeHtml(playerName(p, pid))}</span><span class="muted" style="margin-left:auto; font-size:11px;">${escapeHtml(rosterOwnerName(drops[pid], t.leagueRosters, t.leagueUsers))}</span></div>`;
-  });
-  const typeLabel = t.type === "waiver" ? "Waiver" : t.type === "trade" ? "Trade" : "Free Agent";
+  const addRows = Object.keys(adds).map(pid => transactionPlayerRow(pid, adds[pid], t, "+"));
+  const dropRows = Object.keys(drops).map(pid => transactionPlayerRow(pid, drops[pid], t, "-"));
+  const isTrade = t.type === "trade";
+  const typeLabel = t.type === "waiver" ? "Waiver" : isTrade ? "Trade" : "Free Agent";
+  const cardStyle = isTrade
+    ? "border-color: var(--gold); background: rgba(215,165,62,0.06);"
+    : "";
   return `
-    <div class="finder-result">
+    <div class="finder-result" style="${cardStyle}">
       <div class="row" style="justify-content:space-between;">
-        <span style="font-weight:700; font-size:12.5px;">${escapeHtml(t.leagueName)} - ${typeLabel}</span>
+        <span style="font-weight:700; font-size:12.5px;">
+          ${isTrade ? '<span class="pbadge" style="background:var(--gold); margin-right:4px;">TRADE</span>' : ""}
+          ${escapeHtml(t.leagueName)} - ${typeLabel}
+        </span>
         <span class="muted mono" style="font-size:10.5px;">${fmtTime(t.created)}</span>
       </div>
       <div style="margin-top:6px;">
