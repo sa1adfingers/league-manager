@@ -104,12 +104,12 @@
   .rcard-section { margin-bottom:10px; }
   .rcard-section:last-child { margin-bottom:0; }
   .rcard-section-label { font-size:10px; letter-spacing:0.1em; color:var(--text-faint); font-weight:700; margin-bottom:6px; }
-  .prow { display:flex; align-items:center; gap:6px; font-size:12.5px; padding:3px 0; }
+  .prow { display:flex; align-items:center; gap:6px; font-size:12.5px; padding:3px 0; flex-wrap:nowrap; }
   .prow.empty { opacity:0.55; }
-  .slot-tag { font-size:9.5px; font-weight:700; color:var(--text-faint); width:28px; flex-shrink:0; font-family: ui-monospace, monospace; }
-  .pname { flex:1; }
-  .pbadge { font-size:9.5px; font-weight:800; color:#10160e; padding:1px 6px; border-radius:4px; letter-spacing:0.02em; }
-  .pteam { font-size:10px; color:var(--text-faint); width:26px; text-align:right; font-family: ui-monospace, monospace; }
+  .slot-tag { font-size:9.5px; font-weight:700; color:var(--text-faint); min-width:28px; flex-shrink:0; font-family: ui-monospace, monospace; white-space:nowrap; }
+  .pname { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pbadge { font-size:9.5px; font-weight:800; color:#10160e; padding:1px 6px; border-radius:4px; letter-spacing:0.02em; flex-shrink:0; }
+  .pteam { font-size:10px; color:var(--text-faint); width:26px; text-align:right; font-family: ui-monospace, monospace; flex-shrink:0; }
 
   /* finder */
   .finder-result { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px; }
@@ -365,55 +365,6 @@ function fmtTime(ts) {
 }
 
 const POS_GROUPS = ["QB","RB","WR","TE","DL","LB","DB","K","DEF"];
-function computeNeeds(league, roster) {
-  const totalRostered = {}; POS_GROUPS.forEach(p => totalRostered[p] = 0);
-  (roster.players || []).forEach(id => {
-    const p = PLAYERS ? PLAYERS[id] : null;
-    const fp = (p && (p.fantasy_positions?.[0] || p.position)) || null;
-    if (fp && POS_GROUPS.includes(fp)) totalRostered[fp]++;
-  });
-  const available = Object.assign({}, totalRostered);
-
-  const slots = (league.roster_positions || []).filter(s => !["BN","IR","TAXI"].includes(s));
-  // Fill strict single-position slots first, then combo slots from most to least restrictive,
-  // so flex/superflex only ever eats into whatever's left over - an exact assignment, not a guess.
-  const priority = { QB:0, RB:0, WR:0, TE:0, DL:0, LB:0, DB:0, K:0, DEF:0, FLEX:1, REC_FLEX:1, WRRB_FLEX:1, RB_FLEX:1, WR_FLEX:1, TE_FLEX:1, IDP_FLEX:1, SUPER_FLEX:2 };
-  const ordered = slots.slice().sort((a, b) => (priority[a] ?? 3) - (priority[b] ?? 3));
-  const eligibleFor = {
-    FLEX: ["RB","WR","TE"],
-    SUPER_FLEX: ["QB","RB","WR","TE"],
-    IDP_FLEX: ["DL","LB","DB"],
-    REC_FLEX: ["WR","TE"],
-    WRRB_FLEX: ["RB","WR"],
-    RB_FLEX: ["RB"],
-    WR_FLEX: ["WR"],
-    TE_FLEX: ["TE"],
-  };
-
-  const deficient = {}; POS_GROUPS.forEach(p => deficient[p] = false);
-  ordered.forEach(slot => {
-    if (POS_GROUPS.includes(slot)) {
-      if (available[slot] > 0) available[slot]--;
-      else deficient[slot] = true;
-    } else if (eligibleFor[slot]) {
-      const pool = eligibleFor[slot];
-      let best = null;
-      pool.forEach(p => { if (available[p] > 0 && (best === null || available[p] > available[best])) best = p; });
-      if (best) available[best]--;
-      else pool.forEach(p => deficient[p] = true);
-    }
-    // any slot type we still don't recognize is simply skipped, same as before -
-    // but the common ones are now all covered above.
-  });
-
-  return POS_GROUPS.map(pos => {
-    const bench = available[pos];
-    let level = "Strong", color = "var(--win)";
-    if (deficient[pos] || bench <= 0) { level = "Urgent"; color = "var(--loss)"; }
-    else if (bench === 1) { level = "Thin"; color = "var(--gold)"; }
-    return { pos, total: totalRostered[pos], bench, deficient: deficient[pos], level, color };
-  });
-}
 
 /* =========================================================
    APP STATE + ROUTER
@@ -1002,7 +953,6 @@ function render() {
   else if (STATE.route === "draft") body = renderDraftTab();
   else if (STATE.route === "draftboard") body = renderDraftBoard();
   else if (STATE.route === "rankings") body = renderRankings();
-  else if (STATE.route === "needs") body = renderNeeds();
   else if (STATE.route === "exposure") body = renderExposure();
   else body = renderDashboard();
 
@@ -1032,7 +982,6 @@ function renderHeader() {
         <button class="nav-btn ${STATE.route==='draft'?'active':''}" onclick="goDraft()">Live Draft</button>
         <button class="nav-btn ${STATE.route==='rankings'?'active':''}" onclick="navigate('rankings')">Rankings</button>
         <button class="nav-btn ${STATE.route==='trending'?'active':''}" onclick="goTrending()">Trending</button>
-        <button class="nav-btn ${STATE.route==='needs'?'active':''}" onclick="navigate('needs')">Needs</button>
         <button class="nav-btn ${STATE.route==='exposure'?'active':''}" onclick="navigate('exposure')">Exposure</button>
         <button class="nav-btn ${STATE.route==='finder'?'active':''}" onclick="navigate('finder')">Player Finder</button>
         <button class="nav-btn ${STATE.route==='compare'?'active':''}" onclick="navigate('compare')">Compare Rosters</button>
@@ -1301,7 +1250,7 @@ function renderLeagueDetail() {
     const grid = document.createElement("div");
     grid.className = "roster-grid";
     grid.id = "roster-grid";
-    grid.innerHTML = rosterGridHtml(data);
+    grid.innerHTML = rosterGridHtml(data, meta);
     wrap.appendChild(grid);
   }
 
@@ -1312,43 +1261,72 @@ function renderRosterGridOnly() {
   const grid = document.getElementById("roster-grid");
   if (!grid) return;
   const data = getLeagueData(STATE.leagueId);
-  grid.innerHTML = rosterGridHtml(data);
+  const meta = getLeagues().find(l => l.id === STATE.leagueId);
+  grid.innerHTML = rosterGridHtml(data, meta);
 }
 
-function rosterGridHtml(data) {
+function rosterGridHtml(data, leagueEntry) {
   const q = (STATE.rosterFilter || "").toLowerCase();
   const slots = starterSlots(data.league);
+  const myRosterId = leagueEntry ? myTeamFor(leagueEntry) : null;
   return data.rosters
     .filter(r => !q || teamLabel(r, data.users).toLowerCase().includes(q))
-    .map(r => rosterCardHtml(r, data.users, slots))
+    .map(r => rosterCardHtml(r, data.users, slots, data.league, myRosterId))
     .join("");
 }
 
-function rosterCardHtml(roster, users, slots) {
+function formatSlotLabel(slot) {
+  const abbrev = {
+    SUPER_FLEX: "SFLX", IDP_FLEX: "IDPX", WRRB_FLEX: "WRRB",
+    REC_FLEX: "RECX", RB_FLEX: "RBFX", WR_FLEX: "WRFX", TE_FLEX: "TEFX"
+  };
+  return abbrev[slot] || slot;
+}
+
+function rosterCardHtml(roster, users, slots, league, myRosterId) {
   const starters = roster.starters || [];
   const reserve = roster.reserve || [];
   const taxi = roster.taxi || [];
   const all = roster.players || [];
   const bench = all.filter(id => !starters.includes(id) && !reserve.includes(id) && !taxi.includes(id));
+  const isMine = myRosterId != null && String(roster.roster_id) === String(myRosterId);
 
   const row = (id, idx, showSlot) => {
     if (!id || id === "0") {
-      return `<div class="prow empty"><span class="slot-tag">${slots[idx]||"-"}</span><span class="pname muted">Empty</span></div>`;
+      return `<div class="prow empty"><span class="slot-tag">${slots[idx] ? formatSlotLabel(slots[idx]) : "-"}</span><span class="pname muted">Empty</span></div>`;
     }
     const p = PLAYERS ? PLAYERS[id] : null;
     const badge = badgeInfo(p);
     return `<div class="prow">
-      ${showSlot ? `<span class="slot-tag">${slots[idx]||badge.label}</span>` : ""}
+      ${showSlot ? `<span class="slot-tag">${slots[idx] ? formatSlotLabel(slots[idx]) : badge.label}</span>` : ""}
       <span class="pname">${escapeHtml(playerName(p, id))}</span>
       <span class="pbadge" style="background:${badge.color}">${badge.label}</span>
       ${p?.team ? `<span class="pteam">${p.team}</span>` : ""}
     </div>`;
   };
 
+  // Position totals, limited to positions this league's roster_positions actually supports -
+  // so a league with no IDP slots doesn't show a row of DL/LB/DB zeros.
+  let countsHtml = "";
+  if (league) {
+    const counts = {};
+    all.forEach(id => {
+      const p = PLAYERS ? PLAYERS[id] : null;
+      const fp = (p && (p.fantasy_positions?.[0] || p.position)) || null;
+      if (fp) counts[fp] = (counts[fp] || 0) + 1;
+    });
+    const relevant = POS_GROUPS.filter(pg => leagueSupportsPosition(league, pg) && counts[pg]);
+    if (relevant.length > 0) {
+      countsHtml = `<div class="muted mono" style="font-size:10px; margin-top:6px; padding-top:6px; border-top:1px solid var(--line);">
+        ${relevant.map(pg => `${pg} ${counts[pg]}`).join(" &middot; ")}
+      </div>`;
+    }
+  }
+
   return `
-    <div class="rcard">
+    <div class="rcard" style="${isMine ? 'border-color: var(--gold); background: rgba(215,165,62,0.06);' : ''}">
       <div class="rcard-head">
-        <span class="rcard-title">${escapeHtml(teamLabel(roster, users))}</span>
+        <span class="rcard-title">${isMine ? '<span class="pbadge" style="background:var(--gold); margin-right:5px;">MINE</span>' : ''}${escapeHtml(teamLabel(roster, users))}</span>
         <span class="rcard-count">${all.length} rostered</span>
       </div>
       <div class="rcard-section">
@@ -1358,6 +1336,7 @@ function rosterCardHtml(roster, users, slots) {
       ${bench.length ? `<div class="rcard-section"><div class="rcard-section-label">Bench</div>${bench.map(id=>row(id,null,false)).join("")}</div>` : ""}
       ${taxi.length ? `<div class="rcard-section"><div class="rcard-section-label">Taxi</div>${taxi.map(id=>row(id,null,false)).join("")}</div>` : ""}
       ${reserve.length ? `<div class="rcard-section"><div class="rcard-section-label">IR</div>${reserve.map(id=>row(id,null,false)).join("")}</div>` : ""}
+      ${countsHtml}
     </div>`;
 }
 
@@ -1413,6 +1392,13 @@ window.removeFromFinderWatchlist = function (playerId) {
   if (box) box.innerHTML = finderWatchlistHtml();
 };
 
+function freeAgentLeaguesHtml(playerId, ownedLeagueIds) {
+  const leagues = getLeagues().filter(l => l.source !== "manual" && !isDismissedByMe(l) && getLeagueData(l.id));
+  const notOwned = leagues.filter(l => !ownedLeagueIds.has(l.id)).map(l => l.nickname);
+  if (notOwned.length === 0) return "";
+  return `<div class="muted" style="font-size:10.5px; margin-top:6px;">Free agent in: ${notOwned.map(n => escapeHtml(n)).join(", ")}</div>`;
+}
+
 function finderWatchlistHtml() {
   const list = getFinderWatchlist();
   if (list.length === 0) {
@@ -1423,11 +1409,13 @@ function finderWatchlistHtml() {
     const p = PLAYERS ? PLAYERS[id] : null;
     const badge = badgeInfo(p);
     const hits = [];
+    const ownedLeagueIds = new Set();
     leagues.forEach(l => {
       const data = getLeagueData(l.id);
       if (!data) return;
       data.rosters.forEach(r => {
         if ((r.players || []).includes(id)) {
+          ownedLeagueIds.add(l.id);
           hits.push({
             leagueId: l.id, leagueName: l.nickname, teamName: teamLabel(r, data.users),
             status: (r.starters || []).includes(id) ? "Starter" : "Bench"
@@ -1458,6 +1446,7 @@ function finderWatchlistHtml() {
           </div>
         </div>
         ${hitRows || '<div class="muted" style="font-size:12px; margin-top:6px;">Not rostered in any saved league.</div>'}
+        ${freeAgentLeaguesHtml(id, ownedLeagueIds)}
       </div>`;
   }).join("");
 }
@@ -1626,66 +1615,72 @@ function finderResultsHtml() {
   if (!q) {
     return `<div class="empty-state"><p>Type a name to see who owns them across your leagues.</p></div>`;
   }
+  if (q.length < 3) {
+    return `<div class="empty-state"><p>Keep typing - need at least 3 letters to search the full player list.</p></div>`;
+  }
+  if (!PLAYERS) {
+    return `<div class="empty-state"><p>Loading player database...</p></div>`;
+  }
 
-  const leagues = getLeagues();
-  // playerId -> { name, badge, hits: [{leagueId, leagueName, teamName, status}] }
-  const hitsByPlayer = {};
+  const leagues = getLeagues().filter(l => l.source !== "manual" && !isDismissedByMe(l) && getLeagueData(l.id));
 
+  // Build ownership first: playerId -> hits[]
+  const ownershipByPlayer = {};
   leagues.forEach(l => {
     const data = getLeagueData(l.id);
-    if (!data) return;
     data.rosters.forEach(r => {
-      const all = r.players || [];
-      const starters = r.starters || [];
-      all.forEach(id => {
-        const p = PLAYERS ? PLAYERS[id] : null;
-        const name = playerName(p, id);
-        if (!name.toLowerCase().includes(q)) return;
-        if (!hitsByPlayer[id]) hitsByPlayer[id] = { name, badge: badgeInfo(p), hits: [] };
-        hitsByPlayer[id].hits.push({
-          leagueId: l.id,
-          leagueName: l.nickname,
-          teamName: teamLabel(r, data.users),
-          status: starters.includes(id) ? "Starter" : "Bench",
+      (r.players || []).forEach(id => {
+        if (!ownershipByPlayer[id]) ownershipByPlayer[id] = [];
+        ownershipByPlayer[id].push({
+          leagueId: l.id, leagueName: l.nickname, teamName: teamLabel(r, data.users),
+          status: (r.starters || []).includes(id) ? "Starter" : "Bench",
         });
       });
     });
   });
 
-  const ids = Object.keys(hitsByPlayer);
-  if (ids.length === 0) {
-    return `<div class="empty-state"><p>No matches in your saved leagues.</p></div>`;
+  // Search the whole player database, not just rostered players, so a
+  // player who's a free agent everywhere still shows up.
+  const matchIds = [];
+  for (const id in PLAYERS) {
+    if (playerName(PLAYERS[id], id).toLowerCase().includes(q)) matchIds.push(id);
   }
+  if (matchIds.length === 0) {
+    return `<div class="empty-state"><p>No players match "${escapeHtml(STATE.finderQuery)}".</p></div>`;
+  }
+  const capped = matchIds.slice(0, 40);
+  const watchlist = getFinderWatchlist();
 
-  return ids.map(id => {
-    const entry = hitsByPlayer[id];
+  return capped.map(id => {
+    const p = PLAYERS[id];
+    const badge = badgeInfo(p);
+    const hits = ownershipByPlayer[id] || [];
+    const ownedLeagueIds = new Set(hits.map(h => h.leagueId));
+    const inList = watchlist.includes(id);
     const statsObj = STATE.showFinderPoints ? STATE.playerSeasonStats[id] : undefined;
-    const inList = getFinderWatchlist().includes(id);
+    const hitRows = hits.map(h => {
+      let pointsText = "";
+      if (STATE.showFinderPoints) {
+        if (statsObj === null) pointsText = ` - stats unavailable`;
+        else if (statsObj) {
+          const hd = getLeagueData(h.leagueId);
+          const pts = hd ? computeLeaguePoints(statsObj, hd.league.scoring_settings) : null;
+          pointsText = pts !== null ? ` - ${pts.toFixed(1)} pts (2025)` : "";
+        }
+      }
+      return `<div class="finder-hit"><span>${escapeHtml(h.leagueName)} - ${escapeHtml(h.teamName)}${pointsText}</span><span class="muted">${h.status}</span></div>`;
+    }).join("");
     return `
       <div class="finder-result">
         <div class="row" style="justify-content:space-between;">
-          <span class="finder-player-name">${escapeHtml(entry.name)}</span>
+          <span class="finder-player-name">${escapeHtml(playerName(p, id))}</span>
           <div class="row">
-            <span class="pbadge" style="background:${entry.badge.color}">${entry.badge.label}</span>
+            <span class="pbadge" style="background:${badge.color}">${badge.label}</span>
             <button class="btn btn-sm ${inList?'btn-danger':'btn-primary'}" onclick="${inList ? `removeFromFinderWatchlist('${id}')` : `addToFinderWatchlist('${id}')`}">${inList ? "Remove" : "+ Add"}</button>
           </div>
         </div>
-        ${entry.hits.map(h => {
-          let pointsText = "";
-          if (STATE.showFinderPoints) {
-            if (statsObj === null) pointsText = ` - stats unavailable`;
-            else if (statsObj) {
-              const hd = getLeagueData(h.leagueId);
-              const pts = hd ? computeLeaguePoints(statsObj, hd.league.scoring_settings) : null;
-              pointsText = pts !== null ? ` - ${pts.toFixed(1)} pts (2025)` : "";
-            }
-          }
-          return `
-          <div class="finder-hit">
-            <span>${escapeHtml(h.leagueName)} - ${escapeHtml(h.teamName)}${pointsText}</span>
-            <span class="muted">${h.status}</span>
-          </div>`;
-        }).join("")}
+        ${hitRows || '<div class="muted" style="font-size:12px; margin-top:6px;">Not rostered in any saved league.</div>'}
+        ${freeAgentLeaguesHtml(id, ownedLeagueIds)}
       </div>`;
   }).join("");
 }
@@ -2321,51 +2316,6 @@ function transactionCardHtml(t) {
 /* =========================================================
    RENDER: POSITIONAL NEEDS (across leagues with "My team" set)
 ========================================================= */
-function renderNeeds() {
-  const wrap = document.createElement("div");
-  const allLeagues = getLeagues();
-  const withTeam = allLeagues.filter(l => myTeamFor(l) && getLeagueData(l.id));
-  const withoutTeam = allLeagues.filter(l => !myTeamFor(l) && getLeagueData(l.id));
-
-  if (withoutTeam.length > 0) {
-    wrap.appendChild(el(`
-      <div class="banner-error" style="color:var(--gold); background:rgba(215,165,62,0.08); border-color:rgba(215,165,62,0.3); margin-top:16px;">
-        Set "My team" on ${withoutTeam.map(l => escapeHtml(l.nickname)).join(", ")} to see ${withoutTeam.length>1?"their":"its"} needs here - open the league and use the picker at the top.
-      </div>
-    `));
-  }
-
-  if (withTeam.length === 0) {
-    wrap.appendChild(el(`<div class="empty-state"><p>No teams set yet. Open a league and set "My team" at the top to see positional needs here.</p></div>`));
-    return wrap;
-  }
-
-  const grid = document.createElement("div");
-  grid.className = "roster-grid";
-  withTeam.forEach(l => {
-    const data = getLeagueData(l.id);
-    const roster = data.rosters.find(r => String(r.roster_id) === String(myTeamFor(l)));
-    if (!roster) return;
-    const needs = computeNeeds(data.league, roster);
-    grid.appendChild(el(`
-      <div class="rcard">
-        <div class="rcard-head">
-          <span class="rcard-title">${escapeHtml(l.nickname)}</span>
-          <span class="rcard-count">${escapeHtml(teamLabel(roster, data.users))}</span>
-        </div>
-        ${needs.map(n => `
-          <div class="prow" style="justify-content:space-between;">
-            <span class="pname">${n.pos}</span>
-            <span class="muted mono" style="font-size:10.5px;">${n.total} rostered${n.deficient ? " - short" : ""}</span>
-            <span class="pbadge" style="background:${n.color}; color:#10160e;">${n.level}</span>
-          </div>`).join("")}
-      </div>
-    `));
-  });
-  wrap.appendChild(grid);
-  return wrap;
-}
-
 /* =========================================================
    RENDER: EXPOSURE (player share % across "my" teams)
 ========================================================= */
@@ -2483,6 +2433,8 @@ function comparePickerHtml(side, state, leagues) {
   const data = state.leagueId ? getLeagueData(state.leagueId) : null;
   const slots = data ? starterSlots(data.league) : [];
   const roster = data && state.rosterId ? data.rosters.find(r => String(r.roster_id) === String(state.rosterId)) : null;
+  const leagueEntry = state.leagueId ? leagues.find(l => l.id === state.leagueId) : null;
+  const myRosterId = leagueEntry ? myTeamFor(leagueEntry) : null;
 
   const container = document.createElement("div");
   const leagueOptions = `<option value="">Select a league...</option>` +
@@ -2495,7 +2447,7 @@ function comparePickerHtml(side, state, leagues) {
       <select onchange="onCompareChange('${side}','leagueId', this.value)">${leagueOptions}</select>
       ${data ? `<select onchange="onCompareChange('${side}','rosterId', this.value)">${teamOptions}</select>` : ""}
     </div>
-    <div>${roster ? rosterCardHtml(roster, data.users, slots) : ""}</div>
+    <div>${roster ? rosterCardHtml(roster, data.users, slots, data.league, myRosterId) : ""}</div>
   `;
   return container;
 }
