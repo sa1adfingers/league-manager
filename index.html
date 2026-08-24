@@ -430,6 +430,9 @@ let STATE = {
   selectedDraftId: null,
   showFinderPoints: false,
   playerSeasonStats: {},
+  rankingsLeagueId: null,
+  rankingsPosition: "QB",
+  rankingsData: {},
 };
 let draftPollInterval = null;
 
@@ -921,6 +924,7 @@ function render() {
   else if (STATE.route === "transactions") body = renderTransactions();
   else if (STATE.route === "draft") body = renderDraftTab();
   else if (STATE.route === "draftboard") body = renderDraftBoard();
+  else if (STATE.route === "rankings") body = renderRankings();
   else if (STATE.route === "needs") body = renderNeeds();
   else if (STATE.route === "exposure") body = renderExposure();
   else body = renderDashboard();
@@ -949,6 +953,7 @@ function renderHeader() {
         <button class="nav-btn ${STATE.route==='matchups'?'active':''}" onclick="goMatchups()">Matchups</button>
         <button class="nav-btn ${STATE.route==='transactions'?'active':''}" onclick="goTransactions()">Transactions</button>
         <button class="nav-btn ${STATE.route==='draft'?'active':''}" onclick="goDraft()">Live Draft</button>
+        <button class="nav-btn ${STATE.route==='rankings'?'active':''}" onclick="navigate('rankings')">Rankings</button>
         <button class="nav-btn ${STATE.route==='trending'?'active':''}" onclick="goTrending()">Trending</button>
         <button class="nav-btn ${STATE.route==='needs'?'active':''}" onclick="navigate('needs')">Needs</button>
         <button class="nav-btn ${STATE.route==='exposure'?'active':''}" onclick="navigate('exposure')">Exposure</button>
@@ -1351,6 +1356,116 @@ window.toggleFinderPoints = async function () {
   }
   render();
 };
+
+/* =========================================================
+   RANKINGS: top 50 by position, 2025 total + points per game
+   (beta - relies on the same unofficial stats endpoint as
+   Player Finder's points feature)
+========================================================= */
+const RANKINGS_POSITIONS = ["QB","RB","WR","TE","K","DEF","DL","LB","DB"];
+
+window.setRankingsLeague = function (id) { STATE.rankingsLeagueId = id; render(); };
+window.setRankingsPosition = function (p) { STATE.rankingsPosition = p; render(); };
+
+window.loadRankings = async function () {
+  const leagueId = STATE.rankingsLeagueId;
+  const position = STATE.rankingsPosition;
+  if (!leagueId) return;
+  await withLoading(async () => {
+    if (!PLAYERS) PLAYERS = await ensurePlayers(false);
+    const data = getLeagueData(leagueId);
+    const scoring = data ? data.league.scoring_settings : null;
+    const key = `${leagueId}|${position}`;
+    let rows;
+    try {
+      const res = await fetch(`https://api.sleeper.com/stats/nfl/2025?season_type=regular&position[]=${position}&order_by=pts_std`);
+      if (!res.ok) throw new Error("bad response");
+      rows = await res.json();
+    } catch (e) {
+      STATE.rankingsData[key] = null;
+      return;
+    }
+    const gpKeys = ["gp", "gms_active", "g", "games_played"];
+    const computed = (rows || []).map(row => {
+      const pid = row.player_id || row.playerId || (row.player && row.player.player_id);
+      const pl = PLAYERS ? PLAYERS[pid] : null;
+      const pts = computeLeaguePoints(row, scoring);
+      const statsBlob = row.stats || row;
+      let gp = null;
+      for (const k of gpKeys) {
+        if (typeof statsBlob[k] === "number" && statsBlob[k] > 0) { gp = statsBlob[k]; break; }
+      }
+      return { id: pid, name: playerName(pl, pid), team: (pl && pl.team) || row.team || "", badge: badgeInfo(pl), total: pts, gp };
+    }).filter(r => r.id && r.total !== null);
+    computed.sort((a, b) => b.total - a.total);
+    STATE.rankingsData[key] = computed.slice(0, 50);
+  });
+};
+
+function renderRankings() {
+  const wrap = document.createElement("div");
+  const leagues = getLeagues().filter(l => l.source !== "manual");
+  if (leagues.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Add a Sleeper league first - rankings need a league's scoring settings to compute points.</p></div>`));
+    return wrap;
+  }
+  if (!STATE.rankingsLeagueId || !leagues.find(l => l.id === STATE.rankingsLeagueId)) {
+    STATE.rankingsLeagueId = leagues[0].id;
+  }
+
+  wrap.appendChild(el(`
+    <div class="row" style="margin-top:16px; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+      <div class="row">
+        <span class="muted" style="font-size:12px;">Scoring from</span>
+        <select onchange="setRankingsLeague(this.value)">
+          ${leagues.map(l => `<option value="${l.id}" ${l.id===STATE.rankingsLeagueId?"selected":""}>${escapeHtml(l.nickname)}</option>`).join("")}
+        </select>
+        <select onchange="setRankingsPosition(this.value)">
+          ${RANKINGS_POSITIONS.map(p => `<option value="${p}" ${p===STATE.rankingsPosition?"selected":""}>${p}</option>`).join("")}
+        </select>
+      </div>
+      <button class="btn btn-sm btn-primary" onclick="loadRankings()" ${STATE.loading?"disabled":""}>
+        ${STATE.loading ? '<span class="spinner"></span>' : ''} Load top 50
+      </button>
+    </div>
+    <div class="muted" style="font-size:10.5px; margin-top:6px;">2025 regular season - unofficial stats endpoint, beta</div>
+  `));
+
+  const key = `${STATE.rankingsLeagueId}|${STATE.rankingsPosition}`;
+  const rows = STATE.rankingsData[key];
+
+  if (rows === undefined) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Click "Load top 50" to fetch ${STATE.rankingsPosition} rankings.</p></div>`));
+    return wrap;
+  }
+  if (rows === null) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Stats unavailable for this position right now.</p></div>`));
+    return wrap;
+  }
+  if (rows.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>No scoreable data found for ${STATE.rankingsPosition} in 2025 yet.</p></div>`));
+    return wrap;
+  }
+
+  const panel = document.createElement("div");
+  panel.className = "panel";
+  panel.innerHTML = `
+    <table>
+      <thead><tr><th style="width:32px;">#</th><th>Player</th><th class="num">Total</th><th class="num">GP</th><th class="num">PPG</th></tr></thead>
+      <tbody>
+        ${rows.map((r, i) => `
+          <tr>
+            <td class="rank">${i+1}</td>
+            <td>${escapeHtml(r.name)} ${r.team ? `<span class="muted mono" style="font-size:10px;">${escapeHtml(r.team)}</span>` : ""}</td>
+            <td class="num mono">${r.total.toFixed(1)}</td>
+            <td class="num mono">${r.gp || "-"}</td>
+            <td class="num mono">${r.gp ? (r.total / r.gp).toFixed(1) : "-"}</td>
+          </tr>`).join("")}
+      </tbody>
+    </table>`;
+  wrap.appendChild(panel);
+  return wrap;
+}
 
 function finderResultsHtml() {
   const q = (STATE.finderQuery || "").trim().toLowerCase();
