@@ -424,6 +424,7 @@ let STATE = {
   trendingType: "add",
   transactions: null,
   transactionsShown: 30,
+  transactionsWide: false,
   transactionsLeagueFilter: "all",
   transactionsTypeFilter: "all",
   exposureFilter: "",
@@ -811,15 +812,24 @@ window.goTrending = function () {
 };
 
 /* -------- transactions -------- */
-window.loadTransactions = async function () {
+window.loadTransactions = async function (wide) {
   await withLoading(async () => {
     if (!PLAYERS) PLAYERS = await ensurePlayers(false);
     const state = await ensureNflState();
     const currentWeek = state.week || 1;
-    // round 0 covers preseason/pre-lock moves - only worth checking near the
-    // start of the season, since anything from back then is stale by now anyway.
-    const roundsToCheck = new Set([currentWeek, Math.max(0, currentWeek - 1)]);
-    if (currentWeek <= 2) roundsToCheck.add(0);
+    let roundsToCheck;
+    let cutoffDays;
+    if (wide) {
+      // diagnostic fallback: check every round from preseason through now, 60-day window
+      roundsToCheck = new Set(Array.from({ length: currentWeek + 1 }, (_, i) => i));
+      cutoffDays = 60;
+    } else {
+      // round 0 covers preseason/pre-lock moves - only worth checking near the
+      // start of the season, since anything from back then is stale by now anyway.
+      roundsToCheck = new Set([currentWeek, Math.max(0, currentWeek - 1)]);
+      if (currentWeek <= 2) roundsToCheck.add(0);
+      cutoffDays = 14;
+    }
 
     const leagues = getLeagues().filter(l => !isDismissedByMe(l) && l.source !== "manual");
     let all = [];
@@ -835,11 +845,12 @@ window.loadTransactions = async function () {
         } catch (e) { /* skip that week */ }
       }
     }
-    const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - cutoffDays * 24 * 60 * 60 * 1000;
     all = all.filter(t => !t.created || t.created >= cutoff);
     all.sort((a, b) => (b.created || 0) - (a.created || 0));
     STATE.transactions = all;
     STATE.transactionsShown = 30;
+    STATE.transactionsWide = !!wide;
   });
 };
 window.goTransactions = function () {
@@ -1730,7 +1741,7 @@ function renderTransactions() {
 
   wrap.appendChild(el(`
     <div class="row" style="margin-top:16px; justify-content:space-between; flex-wrap:wrap; gap:8px;">
-      <span class="muted" style="font-size:12px;">Last 2 weeks, all saved leagues</span>
+      <span class="muted" style="font-size:12px;">${STATE.transactionsWide ? "Last 60 days" : "Last 2 weeks"}, all saved leagues</span>
       <button class="btn btn-sm" onclick="loadTransactions()" ${STATE.loading?"disabled":""}>
         ${STATE.loading ? '<span class="spinner"></span>' : ''} Refresh
       </button>
@@ -1775,7 +1786,17 @@ function renderTransactions() {
   );
 
   if (filtered.length === 0) {
-    wrap.appendChild(el(`<div class="empty-state"><p>No transactions match that filter.</p></div>`));
+    if (STATE.transactions.length === 0) {
+      wrap.appendChild(el(`
+        <div class="empty-state">
+          <p>${STATE.transactionsWide ? "No transactions found in the last 60 days." : "No transactions found in the last 2 weeks."}</p>
+          <p class="muted">This can be normal during the offseason or a quiet stretch. ${STATE.transactionsWide ? "" : 'Check further back to confirm nothing\'s being missed.'}</p>
+          ${!STATE.transactionsWide ? `<button class="btn btn-sm btn-primary" style="margin-top:8px;" onclick="loadTransactions(true)">Check last 60 days</button>` : ""}
+        </div>
+      `));
+    } else {
+      wrap.appendChild(el(`<div class="empty-state"><p>No transactions match that filter - try "All leagues" or "All types".</p></div>`));
+    }
     return wrap;
   }
 
