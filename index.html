@@ -165,6 +165,48 @@ function removeLeagueData(id) { DB.remove("league." + id); }
 function getPlayersCache() { return DB.get("players", null); }
 function savePlayersCache(obj) { DB.set("players", obj); }
 
+function getCloudConfig() { return DB.get("cloud", null); }
+function saveCloudConfig(cfg) { DB.set("cloud", cfg); }
+function clearCloudConfig() { DB.remove("cloud"); }
+
+/* =========================================================
+   CLOUD SYNC (Supabase) â€” syncs only the saved-league list
+   (id + nickname) across devices. Roster/standings/player data
+   always comes fresh from Sleeper on whatever device you're on.
+========================================================= */
+async function cloudFetch(path, options) {
+  const cfg = getCloudConfig();
+  if (!cfg) throw new Error("Cloud sync isn't connected.");
+  const res = await fetch(`${cfg.url}/rest/v1/${path}`, Object.assign({}, options, {
+    headers: Object.assign({
+      apikey: cfg.key,
+      Authorization: `Bearer ${cfg.key}`,
+      "Content-Type": "application/json",
+      "x-app-passphrase": cfg.passphrase || "",
+    }, (options && options.headers) || {})
+  }));
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    const authHint = res.status === 401 || res.status === 403 ? " Check that the passphrase matches on both devices." : "";
+    throw new Error("Cloud sync error (" + res.status + "):" + authHint + " " + text.slice(0, 140));
+  }
+  return res.status === 204 ? null : res.json();
+}
+async function cloudPullLeagues() {
+  const rows = await cloudFetch("leagues?select=*");
+  return (rows || []).map(r => ({ id: r.id, nickname: r.nickname, addedAt: r.added_at }));
+}
+async function cloudUpsertLeague(l) {
+  await cloudFetch("leagues?on_conflict=id", {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates" },
+    body: JSON.stringify([{ id: l.id, nickname: l.nickname, added_at: l.addedAt || Date.now() }])
+  });
+}
+async function cloudDeleteLeague(id) {
+  await cloudFetch(`leagues?id=eq.${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
 /* =========================================================
    SLEEPER API
 ========================================================= */
@@ -207,7 +249,7 @@ async function ensurePlayers(force) {
   }
   const payload = { updatedAt: Date.now(), map: trimmed };
   const ok = savePlayersCache(payload);
-  if (!ok && cached) return cached.map; // storage full — fall back to whatever we had
+  if (!ok && cached) return cached.map; // storage full â€” fall back to whatever we had
   return trimmed;
 }
 
@@ -315,9 +357,14 @@ window.addLeague = async function () {
     const data = await syncLeagueData(id);
     if (!PLAYERS) PLAYERS = await ensurePlayers(false);
     const leagues = getLeagues();
-    if (!leagues.find(l => l.id === id)) {
-      leagues.push({ id, nickname: data.league.name || id, addedAt: Date.now() });
+    let entry = leagues.find(l => l.id === id);
+    if (!entry) {
+      entry = { id, nickname: data.league.name || id, addedAt: Date.now() };
+      leagues.push(entry);
       saveLeagues(leagues);
+    }
+    if (getCloudConfig()) {
+      try { await cloudUpsertLeague(entry); } catch (e) { console.error("Cloud push failed", e); }
     }
     input.value = "";
     navigate("league", { leagueId: id, tab: "standings" });
@@ -340,15 +387,18 @@ window.refreshPlayers = async function () {
   await withLoading(async () => { PLAYERS = await ensurePlayers(true); });
 };
 
-window.removeLeague = function (id) {
+window.removeLeague = async function (id) {
   if (!confirm("Remove this league from League Manager? Local data for it will be deleted.")) return;
   const leagues = getLeagues().filter(l => l.id !== id);
   saveLeagues(leagues);
   removeLeagueData(id);
+  if (getCloudConfig()) {
+    try { await cloudDeleteLeague(id); } catch (e) { console.error("Cloud delete failed", e); }
+  }
   navigate("dashboard");
 };
 
-window.renameLeague = function (id) {
+window.renameLeague = async function (id) {
   const leagues = getLeagues();
   const l = leagues.find(x => x.id === id);
   if (!l) return;
@@ -356,7 +406,47 @@ window.renameLeague = function (id) {
   if (name === null) return;
   l.nickname = name.trim() || l.nickname;
   saveLeagues(leagues);
+  if (getCloudConfig()) {
+    try { await cloudUpsertLeague(l); } catch (e) { console.error("Cloud push failed", e); }
+  }
   render();
+};
+
+/* -------- cloud sync connect/disconnect -------- */
+window.connectCloud = async function () {
+  const urlInput = document.getElementById("cloud-url-input");
+  const keyInput = document.getElementById("cloud-key-input");
+  const passInput = document.getElementById("cloud-pass-input");
+  const url = (urlInput.value || "").trim().replace(/\/+$/, "");
+  const key = (keyInput.value || "").trim();
+  const passphrase = (passInput.value || "").trim();
+  if (!url || !key || !passphrase) {
+    setState({ error: "URL, key, and passphrase are all required." });
+    return;
+  }
+  await withLoading(async () => {
+    saveCloudConfig({ url, key, passphrase });
+    const cloudLeagues = await cloudPullLeagues();
+    if (cloudLeagues.length > 0) {
+      saveLeagues(cloudLeagues);
+    } else {
+      const local = getLeagues();
+      for (const l of local) { await cloudUpsertLeague(l); }
+    }
+  });
+};
+
+window.disconnectCloud = function () {
+  if (!confirm("Disconnect cloud sync? Leagues already saved on this device stay put â€” this just stops syncing.")) return;
+  clearCloudConfig();
+  render();
+};
+
+window.pullCloudNow = async function () {
+  await withLoading(async () => {
+    const cloudLeagues = await cloudPullLeagues();
+    saveLeagues(cloudLeagues);
+  });
 };
 
 window.openLeague = function (id) { navigate("league", { leagueId: id, tab: "standings" }); };
@@ -383,7 +473,7 @@ function render() {
   app.innerHTML = "";
   app.appendChild(renderHeader());
   app.appendChild(el(`<div class="yardline"></div>`));
-  if (STATE.error) app.appendChild(el(`<div class="banner-error">⚠ ${escapeHtml(STATE.error)}</div>`));
+  if (STATE.error) app.appendChild(el(`<div class="banner-error">âš  ${escapeHtml(STATE.error)}</div>`));
 
   let body;
   if (STATE.route === "dashboard") body = renderDashboard();
@@ -405,7 +495,7 @@ function renderHeader() {
           <h1 class="brand-title">League Manager</h1>
         </div>
         <div class="row">
-          ${leagues.length > 0 ? `<button class="btn btn-sm" onclick="syncAll()" ${STATE.loading?"disabled":""}>${STATE.loading ? '<span class="spin">⟳</span>' : '⟳'} Sync all</button>` : ""}
+          ${leagues.length > 0 ? `<button class="btn btn-sm" onclick="syncAll()" ${STATE.loading?"disabled":""}>${STATE.loading ? '<span class="spin">âŸ³</span>' : 'âŸ³'} Sync all</button>` : ""}
         </div>
       </div>
       <div class="nav">
@@ -426,10 +516,10 @@ function renderDashboard() {
 
   wrap.appendChild(el(`
     <div class="row" style="margin-top:16px;">
-      <input id="add-league-input" type="text" placeholder="Paste a Sleeper league ID…" style="flex:1; min-width:220px;"
+      <input id="add-league-input" type="text" placeholder="Paste a Sleeper league IDâ€¦" style="flex:1; min-width:220px;"
         onkeydown="if(event.key==='Enter') addLeague()" />
       <button class="btn btn-primary" onclick="addLeague()" ${STATE.loading?"disabled":""}>
-        ${STATE.loading ? '<span class="spin">⟳</span>' : '+'} Add league
+        ${STATE.loading ? '<span class="spin">âŸ³</span>' : '+'} Add league
       </button>
     </div>
   `));
@@ -438,7 +528,7 @@ function renderDashboard() {
     wrap.appendChild(el(`
       <div class="empty-state">
         <p>No leagues saved yet.</p>
-        <p class="muted">Paste a Sleeper league ID above — find it in your league's URL on sleeper.com.</p>
+        <p class="muted">Paste a Sleeper league ID above â€” find it in your league's URL on sleeper.com.</p>
       </div>
     `));
     return wrap;
@@ -453,11 +543,11 @@ function renderDashboard() {
     grid.appendChild(el(`
       <div class="league-card" onclick="openLeague('${l.id}')">
         <div class="league-card-title">${escapeHtml(l.nickname)}</div>
-        <div class="league-card-sub">${data ? escapeHtml(data.league.season) + " · " + data.rosters.length + " teams" : "Not synced yet"}</div>
+        <div class="league-card-sub">${data ? escapeHtml(data.league.season) + " Â· " + data.rosters.length + " teams" : "Not synced yet"}</div>
         ${top ? `<div class="league-card-row"><span>Leader</span><span>${escapeHtml(top.name)} (${top.wins}-${top.losses}${top.ties?`-${top.ties}`:""})</span></div>` : ""}
         <div class="league-card-row"><span>Last synced</span><span class="mono">${fmtTime(data?.syncedAt)}</span></div>
         <div class="league-card-actions" onclick="event.stopPropagation()">
-          <button class="btn btn-sm" onclick="syncOne('${l.id}')">⟳ Sync</button>
+          <button class="btn btn-sm" onclick="syncOne('${l.id}')">âŸ³ Sync</button>
           <button class="btn btn-sm" onclick="renameLeague('${l.id}')">Rename</button>
           <button class="btn btn-sm btn-danger" onclick="removeLeague('${l.id}')">Remove</button>
         </div>
@@ -474,7 +564,44 @@ function renderDashboard() {
     </div>
   `));
 
+  wrap.appendChild(renderCloudPanel());
+
   return wrap;
+}
+
+function renderCloudPanel() {
+  const cfg = getCloudConfig();
+  if (cfg) {
+    return el(`
+      <div class="panel" style="padding:14px; margin-top:14px;">
+        <div class="row" style="justify-content:space-between;">
+          <span style="font-size:13px; font-weight:700; color:var(--gold);">â˜ Cloud sync connected</span>
+          <div class="row">
+            <button class="btn btn-sm" onclick="pullCloudNow()">âŸ³ Pull latest</button>
+            <button class="btn btn-sm btn-danger" onclick="disconnectCloud()">Disconnect</button>
+          </div>
+        </div>
+        <div class="muted" style="font-size:11.5px; margin-top:6px;">
+          Your saved-league list syncs across every device connected with the same URL, key, and passphrase. Add a league here, it shows up on your phone next time it pulls.
+        </div>
+      </div>
+    `);
+  }
+  return el(`
+    <div class="panel" style="padding:14px; margin-top:14px;">
+      <div style="font-size:13px; font-weight:700; margin-bottom:4px;">â˜ Cloud sync (optional)</div>
+      <div class="muted" style="font-size:11.5px; margin-bottom:10px;">
+        Connect a free Supabase project to keep your saved-league list in sync across devices.
+        Roster and standings data still comes fresh from Sleeper on each device â€” this only syncs which leagues you've added.
+      </div>
+      <div class="row">
+        <input id="cloud-url-input" type="text" placeholder="Supabase project URL" style="flex:1; min-width:180px;" />
+        <input id="cloud-key-input" type="text" placeholder="Supabase anon public key" style="flex:1; min-width:180px;" />
+        <input id="cloud-pass-input" type="text" placeholder="Shared passphrase" style="flex:1; min-width:140px;" />
+        <button class="btn btn-primary btn-sm" onclick="connectCloud()" ${STATE.loading?"disabled":""}>Connect</button>
+      </div>
+    </div>
+  `);
 }
 
 /* =========================================================
@@ -496,13 +623,13 @@ function renderLeagueDetail() {
     <div class="row" style="margin-top:16px; justify-content:space-between;">
       <div>
         <div style="font-weight:800; font-size:18px;">${escapeHtml(meta?.nickname || data.league.name)}</div>
-        <div class="muted" style="font-size:12px;">${escapeHtml(data.league.season)} · synced ${fmtTime(data.syncedAt)}</div>
+        <div class="muted" style="font-size:12px;">${escapeHtml(data.league.season)} Â· synced ${fmtTime(data.syncedAt)}</div>
       </div>
       <div class="row">
         <button class="btn btn-sm" onclick="syncOne('${STATE.leagueId}')" ${STATE.loading?"disabled":""}>
-          ${STATE.loading ? '<span class="spin">⟳</span>' : '⟳'} Sync
+          ${STATE.loading ? '<span class="spin">âŸ³</span>' : 'âŸ³'} Sync
         </button>
-        <button class="btn btn-sm" onclick="navigate('dashboard')">← Dashboard</button>
+        <button class="btn btn-sm" onclick="navigate('dashboard')">â† Dashboard</button>
       </div>
     </div>
   `));
@@ -535,7 +662,7 @@ function renderLeagueDetail() {
     wrap.appendChild(table);
   } else {
     wrap.appendChild(el(`
-      <input type="text" placeholder="Filter by team name…" style="width:100%; margin-bottom:14px;"
+      <input type="text" placeholder="Filter by team nameâ€¦" style="width:100%; margin-bottom:14px;"
         oninput="setRosterFilter(this.value)" value="${escapeHtml(STATE.rosterFilter)}" />
     `));
     const grid = document.createElement("div");
@@ -573,7 +700,7 @@ function rosterCardHtml(roster, users, slots) {
 
   const row = (id, idx, showSlot) => {
     if (!id || id === "0") {
-      return `<div class="prow empty"><span class="slot-tag">${slots[idx]||"—"}</span><span class="pname muted">Empty</span></div>`;
+      return `<div class="prow empty"><span class="slot-tag">${slots[idx]||"â€”"}</span><span class="pname muted">Empty</span></div>`;
     }
     const p = PLAYERS ? PLAYERS[id] : null;
     const badge = badgeInfo(p);
@@ -608,7 +735,7 @@ function renderFinder() {
   const wrap = document.createElement("div");
   wrap.appendChild(el(`
     <div style="margin-top:16px;">
-      <input type="text" placeholder="Search a player across every saved league…" style="width:100%;"
+      <input type="text" placeholder="Search a player across every saved leagueâ€¦" style="width:100%;"
         oninput="onFinderInput(this.value)" />
     </div>
   `));
@@ -659,7 +786,7 @@ function renderFinder() {
         </div>
         ${entry.hits.map(h => `
           <div class="finder-hit">
-            <span>${escapeHtml(h.leagueName)} — ${escapeHtml(h.teamName)}</span>
+            <span>${escapeHtml(h.leagueName)} â€” ${escapeHtml(h.teamName)}</span>
             <span class="muted">${h.status}</span>
           </div>`).join("")}
       </div>
@@ -698,9 +825,9 @@ function comparePickerHtml(side, state, leagues) {
   const roster = data && state.rosterId ? data.rosters.find(r => String(r.roster_id) === String(state.rosterId)) : null;
 
   const container = document.createElement("div");
-  const leagueOptions = `<option value="">Select a league…</option>` +
+  const leagueOptions = `<option value="">Select a leagueâ€¦</option>` +
     leagues.map(l => `<option value="${l.id}" ${state.leagueId===l.id?"selected":""}>${escapeHtml(l.nickname)}</option>`).join("");
-  const teamOptions = data ? `<option value="">Select a team…</option>` +
+  const teamOptions = data ? `<option value="">Select a teamâ€¦</option>` +
     data.rosters.map(r => `<option value="${r.roster_id}" ${String(state.rosterId)===String(r.roster_id)?"selected":""}>${escapeHtml(teamLabel(r, data.users))}</option>`).join("") : "";
 
   container.innerHTML = `
@@ -723,6 +850,7 @@ window.navigate = navigate;
 
 /* boot */
 render();
+if (getCloudConfig()) { pullCloudNow(); }
 </script>
 </body>
 </html>
