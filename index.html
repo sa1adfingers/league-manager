@@ -1428,6 +1428,8 @@ function renderTrending() {
     return wrap;
   }
 
+  const relevantLeagues = getLeagues().filter(l => l.source !== "manual" && !isDismissedByMe(l));
+
   const panel = document.createElement("div");
   panel.className = "panel";
   panel.innerHTML = `
@@ -1437,9 +1439,17 @@ function renderTrending() {
         ${STATE.trending.map((r,i) => {
           const p = PLAYERS ? PLAYERS[r.player_id] : null;
           const badge = badgeInfo(p);
+          const availableIn = relevantLeagues.filter(l => {
+            const data = getLeagueData(l.id);
+            if (!data) return false;
+            return !data.rosters.some(ro => (ro.players || []).includes(r.player_id));
+          }).map(l => l.nickname);
           return `<tr>
             <td class="rank">${i+1}</td>
-            <td>${escapeHtml(playerName(p, r.player_id))} <span class="pbadge" style="background:${badge.color}">${badge.label}</span></td>
+            <td>
+              ${escapeHtml(playerName(p, r.player_id))} <span class="pbadge" style="background:${badge.color}">${badge.label}</span>
+              ${availableIn.length ? `<div class="muted" style="font-size:10px; margin-top:2px;">Free agent in: ${availableIn.map(n => escapeHtml(n)).join(", ")}</div>` : ""}
+            </td>
             <td class="num mono">${r.count}</td>
           </tr>`;
         }).join("")}
@@ -1452,6 +1462,23 @@ function renderTrending() {
 /* =========================================================
    RENDER: TRANSACTIONS
 ========================================================= */
+function waiverInfoHtml(league) {
+  const data = getLeagueData(league.id);
+  if (!data) return "";
+  const s = data.league.settings || {};
+  const parts = [];
+  if (s.waiver_budget) parts.push(`FAAB budget $${s.waiver_budget}`);
+  if (s.trade_deadline) parts.push(`Trade deadline Week ${s.trade_deadline}`);
+  return `
+    <div class="row" style="justify-content:space-between; padding:7px 0; border-top:1px solid var(--line); flex-wrap:wrap;">
+      <div style="font-size:11.5px;">
+        <span style="font-weight:700;">${escapeHtml(league.nickname)}</span>
+        ${parts.length ? `<span class="muted"> - ${parts.join(" | ")}</span>` : ""}
+      </div>
+      <a href="https://sleeper.com/leagues/${league.id}" target="_blank" rel="noopener" class="btn btn-sm">Waiver settings on Sleeper</a>
+    </div>`;
+}
+
 function renderTransactions() {
   const wrap = document.createElement("div");
   wrap.appendChild(el(`
@@ -1462,6 +1489,19 @@ function renderTransactions() {
       </button>
     </div>
   `));
+
+  const relevantLeagues = getLeagues().filter(l => l.source !== "manual" && !isDismissedByMe(l) && getLeagueData(l.id));
+  if (relevantLeagues.length > 0) {
+    const panel = document.createElement("div");
+    panel.className = "panel";
+    panel.style.padding = "10px 14px";
+    panel.innerHTML = `
+      <div class="muted" style="font-size:10px; letter-spacing:0.08em; font-weight:700; margin-bottom:2px;">WAIVER INFO</div>
+      ${relevantLeagues.map(l => waiverInfoHtml(l)).join("")}
+    `;
+    wrap.appendChild(panel);
+    wrap.appendChild(el(`<div style="margin-top:14px;"></div>`));
+  }
 
   if (STATE.loading || !STATE.transactions) {
     wrap.appendChild(el(`<div class="empty-state"><p>Loading transactions...</p></div>`));
