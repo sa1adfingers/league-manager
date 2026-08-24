@@ -839,10 +839,17 @@ window.loadDrafts = async function () {
     }
     const picksByDraft = {};
     for (const id in draftsByLeague) {
-      for (const d of draftsByLeague[id]) {
+      for (let i = 0; i < draftsByLeague[id].length; i++) {
+        const d = draftsByLeague[id][i];
         if (d.status === "drafting") {
           try { picksByDraft[d.draft_id] = await fetchJSON(`${SLEEPER}/draft/${d.draft_id}/picks`) || []; }
           catch (e) { picksByDraft[d.draft_id] = []; }
+          // the league drafts-list endpoint doesn't reliably include slot_to_roster_id -
+          // fetch the single-draft endpoint for live drafts to guarantee we have it.
+          try {
+            const full = await fetchJSON(`${SLEEPER}/draft/${d.draft_id}`);
+            if (full) draftsByLeague[id][i] = full;
+          } catch (e) { /* keep the summary version */ }
         }
       }
     }
@@ -1593,6 +1600,10 @@ function liveDraftCardHtml(league, draft) {
     } else {
       notifier = `<div class="muted mono" style="margin-top:8px; font-size:11px;">${onClock.picksUntil} pick${onClock.picksUntil===1?"":"s"} until you're on the clock (Round ${onClock.round}, Pick ${onClock.posInRound})</div>`;
     }
+  } else if (myRosterId && !mySlot) {
+    notifier = `<div class="muted" style="margin-top:8px; font-size:11px;">Can't find your draft slot yet - try Refresh.</div>`;
+  } else if (!myRosterId) {
+    notifier = `<div class="muted" style="margin-top:8px; font-size:11px;">Set "My team" on this league to see your countdown.</div>`;
   }
 
   return `
