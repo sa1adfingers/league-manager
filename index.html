@@ -123,6 +123,12 @@
 
   .spin { display:inline-block; animation: spin 0.9s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner {
+    display:inline-block; width:10px; height:10px;
+    border:2px solid currentColor; border-right-color:transparent;
+    border-radius:50%; animation: spin 0.7s linear infinite;
+    vertical-align:-1px;
+  }
 
   @media (max-width:520px) {
     #app { padding:14px 12px 40px; }
@@ -170,7 +176,7 @@ function saveCloudConfig(cfg) { DB.set("cloud", cfg); }
 function clearCloudConfig() { DB.remove("cloud"); }
 
 /* =========================================================
-   CLOUD SYNC (Supabase) â€” syncs only the saved-league list
+   CLOUD SYNC (Supabase) - syncs only the saved-league list
    (id + nickname) across devices. Roster/standings/player data
    always comes fresh from Sleeper on whatever device you're on.
 ========================================================= */
@@ -249,7 +255,7 @@ async function ensurePlayers(force) {
   }
   const payload = { updatedAt: Date.now(), map: trimmed };
   const ok = savePlayersCache(payload);
-  if (!ok && cached) return cached.map; // storage full â€” fall back to whatever we had
+  if (!ok && cached) return cached.map; // storage full - fall back to whatever we had
   return trimmed;
 }
 
@@ -437,7 +443,7 @@ window.connectCloud = async function () {
 };
 
 window.disconnectCloud = function () {
-  if (!confirm("Disconnect cloud sync? Leagues already saved on this device stay put â€” this just stops syncing.")) return;
+  if (!confirm("Disconnect cloud sync? Leagues already saved on this device stay put - this just stops syncing.")) return;
   clearCloudConfig();
   render();
 };
@@ -473,7 +479,7 @@ function render() {
   app.innerHTML = "";
   app.appendChild(renderHeader());
   app.appendChild(el(`<div class="yardline"></div>`));
-  if (STATE.error) app.appendChild(el(`<div class="banner-error">âš  ${escapeHtml(STATE.error)}</div>`));
+  if (STATE.error) app.appendChild(el(`<div class="banner-error"><strong>Error:</strong> ${escapeHtml(STATE.error)}</div>`));
 
   let body;
   if (STATE.route === "dashboard") body = renderDashboard();
@@ -495,7 +501,7 @@ function renderHeader() {
           <h1 class="brand-title">League Manager</h1>
         </div>
         <div class="row">
-          ${leagues.length > 0 ? `<button class="btn btn-sm" onclick="syncAll()" ${STATE.loading?"disabled":""}>${STATE.loading ? '<span class="spin">âŸ³</span>' : 'âŸ³'} Sync all</button>` : ""}
+          ${leagues.length > 0 ? `<button class="btn btn-sm" onclick="syncAll()" ${STATE.loading?"disabled":""}>${STATE.loading ? '<span class="spinner"></span>' : ''} Sync all</button>` : ""}
         </div>
       </div>
       <div class="nav">
@@ -516,10 +522,10 @@ function renderDashboard() {
 
   wrap.appendChild(el(`
     <div class="row" style="margin-top:16px;">
-      <input id="add-league-input" type="text" placeholder="Paste a Sleeper league IDâ€¦" style="flex:1; min-width:220px;"
+      <input id="add-league-input" type="text" placeholder="Paste a Sleeper league ID..." style="flex:1; min-width:220px;"
         onkeydown="if(event.key==='Enter') addLeague()" />
       <button class="btn btn-primary" onclick="addLeague()" ${STATE.loading?"disabled":""}>
-        ${STATE.loading ? '<span class="spin">âŸ³</span>' : '+'} Add league
+        ${STATE.loading ? '<span class="spinner"></span>' : '+'} Add league
       </button>
     </div>
   `));
@@ -528,7 +534,7 @@ function renderDashboard() {
     wrap.appendChild(el(`
       <div class="empty-state">
         <p>No leagues saved yet.</p>
-        <p class="muted">Paste a Sleeper league ID above â€” find it in your league's URL on sleeper.com.</p>
+        <p class="muted">Paste a Sleeper league ID above - find it in your league's URL on sleeper.com.</p>
       </div>
     `));
     return wrap;
@@ -543,11 +549,11 @@ function renderDashboard() {
     grid.appendChild(el(`
       <div class="league-card" onclick="openLeague('${l.id}')">
         <div class="league-card-title">${escapeHtml(l.nickname)}</div>
-        <div class="league-card-sub">${data ? escapeHtml(data.league.season) + " Â· " + data.rosters.length + " teams" : "Not synced yet"}</div>
+        <div class="league-card-sub">${data ? escapeHtml(data.league.season) + " | " + data.rosters.length + " teams" : "Not synced yet"}</div>
         ${top ? `<div class="league-card-row"><span>Leader</span><span>${escapeHtml(top.name)} (${top.wins}-${top.losses}${top.ties?`-${top.ties}`:""})</span></div>` : ""}
         <div class="league-card-row"><span>Last synced</span><span class="mono">${fmtTime(data?.syncedAt)}</span></div>
         <div class="league-card-actions" onclick="event.stopPropagation()">
-          <button class="btn btn-sm" onclick="syncOne('${l.id}')">âŸ³ Sync</button>
+          <button class="btn btn-sm" onclick="syncOne('${l.id}')">Sync</button>
           <button class="btn btn-sm" onclick="renameLeague('${l.id}')">Rename</button>
           <button class="btn btn-sm btn-danger" onclick="removeLeague('${l.id}')">Remove</button>
         </div>
@@ -575,9 +581,9 @@ function renderCloudPanel() {
     return el(`
       <div class="panel" style="padding:14px; margin-top:14px;">
         <div class="row" style="justify-content:space-between;">
-          <span style="font-size:13px; font-weight:700; color:var(--gold);">â˜ Cloud sync connected</span>
+          <span style="font-size:13px; font-weight:700; color:var(--gold);">Cloud sync connected</span>
           <div class="row">
-            <button class="btn btn-sm" onclick="pullCloudNow()">âŸ³ Pull latest</button>
+            <button class="btn btn-sm" onclick="pullCloudNow()">Pull latest</button>
             <button class="btn btn-sm btn-danger" onclick="disconnectCloud()">Disconnect</button>
           </div>
         </div>
@@ -589,10 +595,10 @@ function renderCloudPanel() {
   }
   return el(`
     <div class="panel" style="padding:14px; margin-top:14px;">
-      <div style="font-size:13px; font-weight:700; margin-bottom:4px;">â˜ Cloud sync (optional)</div>
+      <div style="font-size:13px; font-weight:700; margin-bottom:4px;">Cloud sync (optional)</div>
       <div class="muted" style="font-size:11.5px; margin-bottom:10px;">
         Connect a free Supabase project to keep your saved-league list in sync across devices.
-        Roster and standings data still comes fresh from Sleeper on each device â€” this only syncs which leagues you've added.
+        Roster and standings data still comes fresh from Sleeper on each device - this only syncs which leagues you've added.
       </div>
       <div class="row">
         <input id="cloud-url-input" type="text" placeholder="Supabase project URL" style="flex:1; min-width:180px;" />
@@ -623,13 +629,13 @@ function renderLeagueDetail() {
     <div class="row" style="margin-top:16px; justify-content:space-between;">
       <div>
         <div style="font-weight:800; font-size:18px;">${escapeHtml(meta?.nickname || data.league.name)}</div>
-        <div class="muted" style="font-size:12px;">${escapeHtml(data.league.season)} Â· synced ${fmtTime(data.syncedAt)}</div>
+        <div class="muted" style="font-size:12px;">${escapeHtml(data.league.season)} | synced ${fmtTime(data.syncedAt)}</div>
       </div>
       <div class="row">
         <button class="btn btn-sm" onclick="syncOne('${STATE.leagueId}')" ${STATE.loading?"disabled":""}>
-          ${STATE.loading ? '<span class="spin">âŸ³</span>' : 'âŸ³'} Sync
+          ${STATE.loading ? '<span class="spinner"></span>' : ''} Sync
         </button>
-        <button class="btn btn-sm" onclick="navigate('dashboard')">â† Dashboard</button>
+        <button class="btn btn-sm" onclick="navigate('dashboard')">Back to Dashboard</button>
       </div>
     </div>
   `));
@@ -662,7 +668,7 @@ function renderLeagueDetail() {
     wrap.appendChild(table);
   } else {
     wrap.appendChild(el(`
-      <input type="text" placeholder="Filter by team nameâ€¦" style="width:100%; margin-bottom:14px;"
+      <input type="text" placeholder="Filter by team name..." style="width:100%; margin-bottom:14px;"
         oninput="setRosterFilter(this.value)" value="${escapeHtml(STATE.rosterFilter)}" />
     `));
     const grid = document.createElement("div");
@@ -700,7 +706,7 @@ function rosterCardHtml(roster, users, slots) {
 
   const row = (id, idx, showSlot) => {
     if (!id || id === "0") {
-      return `<div class="prow empty"><span class="slot-tag">${slots[idx]||"â€”"}</span><span class="pname muted">Empty</span></div>`;
+      return `<div class="prow empty"><span class="slot-tag">${slots[idx]||"-"}</span><span class="pname muted">Empty</span></div>`;
     }
     const p = PLAYERS ? PLAYERS[id] : null;
     const badge = badgeInfo(p);
@@ -735,7 +741,7 @@ function renderFinder() {
   const wrap = document.createElement("div");
   wrap.appendChild(el(`
     <div style="margin-top:16px;">
-      <input type="text" placeholder="Search a player across every saved leagueâ€¦" style="width:100%;"
+      <input type="text" placeholder="Search a player across every saved league..." style="width:100%;"
         oninput="onFinderInput(this.value)" />
     </div>
   `));
@@ -786,7 +792,7 @@ function renderFinder() {
         </div>
         ${entry.hits.map(h => `
           <div class="finder-hit">
-            <span>${escapeHtml(h.leagueName)} â€” ${escapeHtml(h.teamName)}</span>
+            <span>${escapeHtml(h.leagueName)} - ${escapeHtml(h.teamName)}</span>
             <span class="muted">${h.status}</span>
           </div>`).join("")}
       </div>
@@ -825,9 +831,9 @@ function comparePickerHtml(side, state, leagues) {
   const roster = data && state.rosterId ? data.rosters.find(r => String(r.roster_id) === String(state.rosterId)) : null;
 
   const container = document.createElement("div");
-  const leagueOptions = `<option value="">Select a leagueâ€¦</option>` +
+  const leagueOptions = `<option value="">Select a league...</option>` +
     leagues.map(l => `<option value="${l.id}" ${state.leagueId===l.id?"selected":""}>${escapeHtml(l.nickname)}</option>`).join("");
-  const teamOptions = data ? `<option value="">Select a teamâ€¦</option>` +
+  const teamOptions = data ? `<option value="">Select a team...</option>` +
     data.rosters.map(r => `<option value="${r.roster_id}" ${String(state.rosterId)===String(r.roster_id)?"selected":""}>${escapeHtml(teamLabel(r, data.users))}</option>`).join("") : "";
 
   container.innerHTML = `
