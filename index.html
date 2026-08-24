@@ -223,13 +223,23 @@ async function cloudFetch(path, options) {
 }
 async function cloudPullLeagues() {
   const rows = await cloudFetch("leagues?select=*");
-  return (rows || []).map(r => ({ id: r.id, nickname: r.nickname, addedAt: r.added_at, teams: r.teams || {}, source: r.source || "sleeper" }));
+  return (rows || []).map(r => ({
+    id: r.id, nickname: r.nickname, addedAt: r.added_at, teams: r.teams || {},
+    source: r.source || "sleeper", manualData: r.manual_data || null
+  }));
 }
 async function cloudUpsertLeague(l) {
+  const body = {
+    id: l.id, nickname: l.nickname, added_at: l.addedAt || Date.now(),
+    teams: l.teams || {}, source: l.source || "sleeper"
+  };
+  if (l.source === "manual") {
+    body.manual_data = getLeagueData(l.id) || null; // manual leagues have no other source to re-sync from
+  }
   await cloudFetch("leagues?on_conflict=id", {
     method: "POST",
     headers: { Prefer: "resolution=merge-duplicates" },
-    body: JSON.stringify([{ id: l.id, nickname: l.nickname, added_at: l.addedAt || Date.now(), teams: l.teams || {}, source: l.source || "sleeper" }])
+    body: JSON.stringify([body])
   });
 }
 async function cloudDeleteLeague(id) {
@@ -432,16 +442,46 @@ async function withLoading(fn) {
 }
 
 /* -------- actions exposed to inline handlers -------- */
+window.onAddLeagueSourceChange = function (source) {
+  const input = document.getElementById("add-league-input");
+  if (!input) return;
+  input.placeholder = source === "manual" ? 'League name (e.g. "ESPN Redraft")' : "Paste a Sleeper league ID...";
+};
+
 window.addLeague = async function () {
   const input = document.getElementById("add-league-input");
   const sourceSelect = document.getElementById("add-league-source");
   const source = (sourceSelect && sourceSelect.value) || "sleeper";
-  const id = (input.value || "").trim();
-  if (!id) return;
-  if (source !== "sleeper") {
-    setState({ error: "That source isn't wired up yet - only Sleeper works right now." });
+  const value = (input.value || "").trim();
+  if (!value) return;
+
+  if (source === "manual") {
+    await withLoading(async () => {
+      const id = "manual-" + Date.now().toString(36);
+      const leagueData = {
+        league: { name: value, season: String(new Date().getFullYear()), roster_positions: [] },
+        rosters: [], users: [], syncedAt: Date.now()
+      };
+      saveLeagueData(id, leagueData);
+      const leagues = getLeagues();
+      const entry = { id, nickname: value, addedAt: Date.now(), source: "manual" };
+      leagues.push(entry);
+      saveLeagues(leagues);
+      if (getCloudConfig()) {
+        try { await cloudUpsertLeague(entry); } catch (e) { console.error("Cloud push failed", e); }
+      }
+      input.value = "";
+      navigate("league", { leagueId: id, tab: "standings" });
+    });
     return;
   }
+
+  if (source !== "sleeper") {
+    setState({ error: "That source isn't wired up yet - only Sleeper and Manual work right now." });
+    return;
+  }
+
+  const id = value;
   await withLoading(async () => {
     const data = await syncLeagueData(id);
     if (!PLAYERS) PLAYERS = await ensurePlayers(false);
@@ -464,10 +504,110 @@ window.syncOne = async function (id) {
   await withLoading(async () => { await syncLeagueData(id); });
 };
 
+/* -------- manual league team editing -------- */
+async function pushManualLeagueUpdate(leagueId) {
+  if (!getCloudConfig()) return;
+  const leagues = getLeagues();
+  const entry = leagues.find(l => l.id === leagueId);
+  if (!entry) return;
+  try { await cloudUpsertLeague(entry); } catch (e) { console.error("Cloud push failed", e); }
+}
+
+window.addManualTeam = async function (leagueId) {
+  const data = getLeagueData(leagueId);
+  if (!data) return;
+  const nextId = data.rosters.reduce((max, r) => Math.max(max, r.roster_id || 0), 0) + 1;
+  const userId = "u" + nextId;
+  data.rosters.push({
+    roster_id: nextId, owner_id: userId, players: [], starters: [],
+    settings: { wins: 0, losses: 0, ties: 0, fpts: 0, fpts_decimal: 0, fpts_against: 0, fpts_against_decimal: 0 }
+  });
+  data.users.push({ user_id: userId, display_name: "New Team" });
+  data.syncedAt = Date.now();
+  saveLeagueData(leagueId, data);
+  await pushManualLeagueUpdate(leagueId);
+  render();
+};
+
+window.updateManualTeam = async function (leagueId, rosterId, field, value) {
+  const data = getLeagueData(leagueId);
+  if (!data) return;
+  const roster = data.rosters.find(r => String(r.roster_id) === String(rosterId));
+  if (!roster) return;
+  const user = data.users.find(u => u.user_id === roster.owner_id);
+  if (field === "name") {
+    if (user) user.display_name = value;
+  } else if (field === "wins" || field === "losses" || field === "ties") {
+    roster.settings[field] = parseInt(value, 10) || 0;
+  } else if (field === "pf") {
+    const n = parseFloat(value) || 0;
+    roster.settings.fpts = Math.floor(n);
+    roster.settings.fpts_decimal = Math.round((n % 1) * 100);
+  } else if (field === "pa") {
+    const n = parseFloat(value) || 0;
+    roster.settings.fpts_against = Math.floor(n);
+    roster.settings.fpts_against_decimal = Math.round((n % 1) * 100);
+  }
+  data.syncedAt = Date.now();
+  saveLeagueData(leagueId, data);
+  await pushManualLeagueUpdate(leagueId);
+};
+
+window.removeManualTeam = async function (leagueId, rosterId) {
+  const data = getLeagueData(leagueId);
+  if (!data) return;
+  const roster = data.rosters.find(r => String(r.roster_id) === String(rosterId));
+  data.rosters = data.rosters.filter(r => String(r.roster_id) !== String(rosterId));
+  if (roster) data.users = data.users.filter(u => u.user_id !== roster.owner_id);
+  data.syncedAt = Date.now();
+  saveLeagueData(leagueId, data);
+  await pushManualLeagueUpdate(leagueId);
+  render();
+};
+
+function renderManualTeamsEditor(leagueId, data) {
+  const rows = data.rosters.map(r => {
+    const user = data.users.find(u => u.user_id === r.owner_id);
+    const pf = ((r.settings.fpts || 0) + (r.settings.fpts_decimal || 0) / 100).toFixed(2);
+    const pa = ((r.settings.fpts_against || 0) + (r.settings.fpts_against_decimal || 0) / 100).toFixed(2);
+    return `
+      <div class="row" style="gap:6px; padding:6px 0; border-top:1px solid var(--line); flex-wrap:wrap;">
+        <input type="text" value="${escapeHtml(user?.display_name || "")}" placeholder="Team name" style="flex:2; min-width:120px; font-size:12px;"
+          onchange="updateManualTeam('${leagueId}','${r.roster_id}','name',this.value)" />
+        <input type="number" value="${r.settings.wins||0}" placeholder="W" style="width:52px; font-size:12px;"
+          onchange="updateManualTeam('${leagueId}','${r.roster_id}','wins',this.value)" />
+        <input type="number" value="${r.settings.losses||0}" placeholder="L" style="width:52px; font-size:12px;"
+          onchange="updateManualTeam('${leagueId}','${r.roster_id}','losses',this.value)" />
+        <input type="number" value="${r.settings.ties||0}" placeholder="T" style="width:52px; font-size:12px;"
+          onchange="updateManualTeam('${leagueId}','${r.roster_id}','ties',this.value)" />
+        <input type="number" step="0.01" value="${pf}" placeholder="PF" style="width:72px; font-size:12px;"
+          onchange="updateManualTeam('${leagueId}','${r.roster_id}','pf',this.value)" />
+        <input type="number" step="0.01" value="${pa}" placeholder="PA" style="width:72px; font-size:12px;"
+          onchange="updateManualTeam('${leagueId}','${r.roster_id}','pa',this.value)" />
+        <button class="btn btn-sm btn-danger" onclick="removeManualTeam('${leagueId}','${r.roster_id}')">Remove</button>
+      </div>`;
+  }).join("");
+
+  return `
+    <div class="panel" style="padding:14px; margin-top:16px;">
+      <div class="row" style="justify-content:space-between;">
+        <span style="font-size:13px; font-weight:700;">Manual teams</span>
+        <button class="btn btn-sm btn-primary" onclick="addManualTeam('${leagueId}')">+ Add team</button>
+      </div>
+      <div class="muted" style="font-size:11px; margin-top:4px;">
+        Enter records and points by hand. Rosters aren't tracked for manual leagues, so Needs/Exposure/Player Finder won't include this league.
+      </div>
+      ${rows || '<div class="muted" style="font-size:12px; margin-top:10px;">No teams yet - add one above.</div>'}
+    </div>
+  `;
+}
+
 window.syncAll = async function () {
   await withLoading(async () => {
-    const leagues = getLeagues();
-    for (const l of leagues) { await syncLeagueData(l.id); }
+    const leagues = getLeagues().filter(l => l.source !== "manual");
+    for (const l of leagues) {
+      try { await syncLeagueData(l.id); } catch (e) { console.error("Sync failed for " + l.id, e); }
+    }
     PLAYERS = await ensurePlayers(false);
   });
 };
@@ -514,6 +654,11 @@ async function mergeWithCloud() {
       const localTeams = merged[idx].teams || {};
       const cloudTeams = cl.teams || {};
       merged[idx] = Object.assign({}, cl, { teams: Object.assign({}, localTeams, cloudTeams) });
+    }
+    // manual leagues have no API to re-sync from, so the cloud copy of their
+    // standings IS the source of truth - write it into local league data.
+    if (cl.source === "manual" && cl.manualData) {
+      saveLeagueData(cl.id, cl.manualData);
     }
   });
   saveLeagues(merged);
@@ -611,7 +756,7 @@ window.loadMatchups = async function (week) {
       const state = await ensureNflState();
       week = state.week || 1;
     }
-    const leagues = getLeagues();
+    const leagues = getLeagues().filter(l => l.source !== "manual");
     const cache = {};
     for (const l of leagues) {
       try { cache[l.id] = await fetchJSON(`${SLEEPER}/league/${l.id}/matchups/${week}`) || []; }
@@ -651,7 +796,7 @@ window.loadTransactions = async function () {
     if (!PLAYERS) PLAYERS = await ensurePlayers(false);
     const state = await ensureNflState();
     const week = state.week || 1;
-    const leagues = getLeagues().filter(l => !isDismissedByMe(l));
+    const leagues = getLeagues().filter(l => !isDismissedByMe(l) && l.source !== "manual");
     let all = [];
     for (const l of leagues) {
       const data = getLeagueData(l.id);
@@ -784,9 +929,9 @@ function renderDashboard() {
         <div class="league-card-sub">${data ? escapeHtml(data.league.season) + " | " + data.rosters.length + " teams" : "Not synced yet"}</div>
         ${top ? `<div class="league-card-row"><span>Leader</span><span>${escapeHtml(top.name)} (${top.wins}-${top.losses}${top.ties?`-${top.ties}`:""})</span></div>` : ""}
         ${mine ? `<div class="league-card-row"><span>My Team</span><span>${escapeHtml(mine.name)} (${mine.wins}-${mine.losses}${mine.ties?`-${mine.ties}`:""}) - #${myIdx+1}</span></div>` : ""}
-        <div class="league-card-row"><span>Last synced</span><span class="mono">${fmtTime(data?.syncedAt)}</span></div>
+        <div class="league-card-row"><span>${l.source === "manual" ? "Last updated" : "Last synced"}</span><span class="mono">${fmtTime(data?.syncedAt)}</span></div>
         <div class="league-card-actions" onclick="event.stopPropagation()">
-          <button class="btn btn-sm" onclick="syncOne('${l.id}')">Sync</button>
+          ${l.source === "manual" ? "" : `<button class="btn btn-sm" onclick="syncOne('${l.id}')">Sync</button>`}
           <button class="btn btn-sm" onclick="renameLeague('${l.id}')">Rename</button>
           <button class="btn btn-sm btn-danger" onclick="removeLeague('${l.id}')">Remove</button>
         </div>
@@ -810,12 +955,12 @@ function renderSync() {
     <div class="panel" style="padding:14px; margin-top:16px;">
       <div style="font-size:13px; font-weight:700; margin-bottom:4px;">Add a league</div>
       <div class="muted" style="font-size:11.5px; margin-bottom:10px;">
-        More platforms are planned - for now, Sleeper is the only source.
+        Sleeper syncs live. No API for ESPN or DraftKings Best Ball yet, so use Manual to track those by hand.
       </div>
       <div class="row">
-        <select id="add-league-source" style="font-size:13px;">
+        <select id="add-league-source" style="font-size:13px;" onchange="onAddLeagueSourceChange(this.value)">
           <option value="sleeper">Sleeper</option>
-          <option value="espn" disabled>ESPN (coming soon)</option>
+          <option value="manual">Manual (ESPN, DraftKings, other)</option>
           <option value="yahoo" disabled>Yahoo (coming soon)</option>
           <option value="mfl" disabled>MFL (coming soon)</option>
         </select>
@@ -924,6 +1069,7 @@ function renderLeagueDetail() {
   const leagues = getLeagues();
   const meta = leagues.find(l => l.id === STATE.leagueId);
   const data = getLeagueData(STATE.leagueId);
+  const isManual = meta?.source === "manual";
 
   if (!data) {
     wrap.appendChild(el(`<div class="empty-state"><p>No data for this league yet.</p>
@@ -934,8 +1080,8 @@ function renderLeagueDetail() {
   wrap.appendChild(el(`
     <div class="row" style="margin-top:16px; justify-content:space-between;">
       <div>
-        <div style="font-weight:800; font-size:18px;">${escapeHtml(meta?.nickname || data.league.name)}</div>
-        <div class="muted" style="font-size:12px;">${escapeHtml(data.league.season)} | synced ${fmtTime(data.syncedAt)}</div>
+        <div style="font-weight:800; font-size:18px;">${escapeHtml(meta?.nickname || data.league.name)} ${isManual ? '<span class="muted mono" style="font-size:10px;">MANUAL</span>' : ''}</div>
+        <div class="muted" style="font-size:12px;">${escapeHtml(data.league.season)} | ${isManual ? "updated" : "synced"} ${fmtTime(data.syncedAt)}</div>
       </div>
       <div class="row">
         <select onchange="setMyTeam('${STATE.leagueId}', this.value)" style="font-size:12px;">
@@ -943,13 +1089,18 @@ function renderLeagueDetail() {
           <option value="NONE" ${rawTeamPick(meta||{})==="NONE"?"selected":""}>Not my league</option>
           ${data.rosters.map(r => `<option value="${r.roster_id}" ${String(rawTeamPick(meta||{}))===String(r.roster_id)?"selected":""}>${escapeHtml(teamLabel(r, data.users))}</option>`).join("")}
         </select>
+        ${isManual ? "" : `
         <button class="btn btn-sm" onclick="syncOne('${STATE.leagueId}')" ${STATE.loading?"disabled":""}>
           ${STATE.loading ? '<span class="spinner"></span>' : ''} Sync
-        </button>
+        </button>`}
         <button class="btn btn-sm" onclick="navigate('dashboard')">Back to Dashboard</button>
       </div>
     </div>
   `));
+
+  if (isManual) {
+    wrap.appendChild(el(renderManualTeamsEditor(STATE.leagueId, data)));
+  }
 
   wrap.appendChild(el(`
     <div class="tabs">
