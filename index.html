@@ -423,10 +423,17 @@ let STATE = {
   transactions: null,
   exposureFilter: "",
   finderQuery: "",
+  draftsByLeague: {},
+  picksByDraft: {},
+  draftsLoaded: false,
 };
+let draftPollInterval = null;
 
 function setState(patch) { Object.assign(STATE, patch); render(); }
-function navigate(route, extra) { setState(Object.assign({ route, error: null }, extra || {})); }
+function navigate(route, extra) {
+  if (route !== "draft" && draftPollInterval) { clearInterval(draftPollInterval); draftPollInterval = null; }
+  setState(Object.assign({ route, error: null }, extra || {}));
+}
 
 function el(html) {
   const t = document.createElement("template");
@@ -770,8 +777,8 @@ window.goMatchups = function () {
   navigate("matchups");
   if (STATE.matchupWeek === null) loadMatchups();
 };
-window.toggleMatchupsMyOnly = function () {
-  STATE.matchupsMyOnly = !STATE.matchupsMyOnly;
+window.setMatchupsMyOnly = function (v) {
+  STATE.matchupsMyOnly = v;
   render();
 };
 
@@ -1279,9 +1286,8 @@ function renderMatchups() {
         <select onchange="loadMatchups(parseInt(this.value))">
           ${Array.from({length:18},(_,i)=>i+1).map(w=>`<option value="${w}" ${w===week?"selected":""}>${w}</option>`).join("")}
         </select>
-        <button class="btn btn-sm ${STATE.matchupsMyOnly?'btn-primary':''}" onclick="toggleMatchupsMyOnly()">
-          ${STATE.matchupsMyOnly ? "My matchups only" : "All matchups"}
-        </button>
+        <button class="btn btn-sm ${!STATE.matchupsMyOnly?'btn-primary':''}" onclick="setMatchupsMyOnly(false)">All matchups</button>
+        <button class="btn btn-sm ${STATE.matchupsMyOnly?'btn-primary':''}" onclick="setMatchupsMyOnly(true)">My matchups</button>
       </div>
       <button class="btn btn-sm" onclick="loadMatchups(${week||1})" ${STATE.loading?"disabled":""}>
         ${STATE.loading ? '<span class="spinner"></span>' : ''} Refresh
