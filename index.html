@@ -200,13 +200,13 @@ async function cloudFetch(path, options) {
 }
 async function cloudPullLeagues() {
   const rows = await cloudFetch("leagues?select=*");
-  return (rows || []).map(r => ({ id: r.id, nickname: r.nickname, addedAt: r.added_at }));
+  return (rows || []).map(r => ({ id: r.id, nickname: r.nickname, addedAt: r.added_at, myRosterId: r.my_roster_id || null }));
 }
 async function cloudUpsertLeague(l) {
   await cloudFetch("leagues?on_conflict=id", {
     method: "POST",
     headers: { Prefer: "resolution=merge-duplicates" },
-    body: JSON.stringify([{ id: l.id, nickname: l.nickname, added_at: l.addedAt || Date.now() }])
+    body: JSON.stringify([{ id: l.id, nickname: l.nickname, added_at: l.addedAt || Date.now(), my_roster_id: l.myRosterId || null }])
   });
 }
 async function cloudDeleteLeague(id) {
@@ -216,6 +216,12 @@ async function cloudDeleteLeague(id) {
 /* =========================================================
    SLEEPER API
 ========================================================= */
+let NFL_STATE = null;
+async function ensureNflState() {
+  if (NFL_STATE) return NFL_STATE;
+  NFL_STATE = await fetchJSON(`${SLEEPER}/state/nfl`);
+  return NFL_STATE;
+}
 const SLEEPER = "https://api.sleeper.app/v1";
 
 async function fetchJSON(url) {
@@ -323,6 +329,46 @@ function fmtTime(ts) {
   return d.toLocaleDateString([], {month:"short", day:"numeric"}) + " " + d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
 }
 
+const POS_GROUPS = ["QB","RB","WR","TE","DL","LB","DB","K"];
+function computeNeeds(league, roster) {
+  const totalRostered = {}; POS_GROUPS.forEach(p => totalRostered[p] = 0);
+  (roster.players || []).forEach(id => {
+    const p = PLAYERS ? PLAYERS[id] : null;
+    const fp = (p && (p.fantasy_positions?.[0] || p.position)) || null;
+    if (fp && POS_GROUPS.includes(fp)) totalRostered[fp]++;
+  });
+  const available = Object.assign({}, totalRostered);
+
+  const slots = (league.roster_positions || []).filter(s => !["BN","IR","TAXI"].includes(s));
+  // Fill strict single-position slots first, then combo slots from most to least restrictive,
+  // so flex/superflex only ever eats into whatever's left over - an exact assignment, not a guess.
+  const priority = { QB:0, RB:0, WR:0, TE:0, DL:0, LB:0, DB:0, K:0, FLEX:1, IDP_FLEX:1, SUPER_FLEX:2 };
+  const ordered = slots.slice().sort((a, b) => (priority[a] ?? 3) - (priority[b] ?? 3));
+  const eligibleFor = { FLEX: ["RB","WR","TE"], SUPER_FLEX: ["QB","RB","WR","TE"], IDP_FLEX: ["DL","LB","DB"] };
+
+  const deficient = {}; POS_GROUPS.forEach(p => deficient[p] = false);
+  ordered.forEach(slot => {
+    if (POS_GROUPS.includes(slot)) {
+      if (available[slot] > 0) available[slot]--;
+      else deficient[slot] = true;
+    } else if (eligibleFor[slot]) {
+      const pool = eligibleFor[slot];
+      let best = null;
+      pool.forEach(p => { if (available[p] > 0 && (best === null || available[p] > available[best])) best = p; });
+      if (best) available[best]--;
+      else pool.forEach(p => deficient[p] = true);
+    }
+  });
+
+  return POS_GROUPS.map(pos => {
+    const bench = available[pos];
+    let level = "Strong", color = "var(--win)";
+    if (deficient[pos] || bench <= 0) { level = "Urgent"; color = "var(--loss)"; }
+    else if (bench === 1) { level = "Thin"; color = "var(--gold)"; }
+    return { pos, total: totalRostered[pos], bench, deficient: deficient[pos], level, color };
+  });
+}
+
 /* =========================================================
    APP STATE + ROUTER
 ========================================================= */
@@ -336,6 +382,11 @@ let STATE = {
   compareB: { leagueId: null, rosterId: null },
   loading: false,
   error: null,
+  matchupWeek: null,
+  matchupsCache: {},
+  trending: null,
+  trendingType: "add",
+  transactions: null,
 };
 
 function setState(patch) { Object.assign(STATE, patch); render(); }
@@ -419,6 +470,26 @@ window.renameLeague = async function (id) {
 };
 
 /* -------- cloud sync connect/disconnect -------- */
+async function mergeWithCloud() {
+  const cloudLeagues = await cloudPullLeagues();
+  const local = getLeagues();
+  const merged = local.slice();
+  cloudLeagues.forEach(cl => {
+    const idx = merged.findIndex(l => l.id === cl.id);
+    if (idx === -1) merged.push(cl);
+    else merged[idx] = cl; // cloud wins on nickname/myRosterId conflicts
+  });
+  saveLeagues(merged);
+  // anything local that the cloud doesn't know about yet gets pushed up,
+  // so a thin/empty cloud table never causes local leagues to vanish.
+  const cloudIds = new Set(cloudLeagues.map(l => l.id));
+  for (const l of merged) {
+    if (!cloudIds.has(l.id)) {
+      try { await cloudUpsertLeague(l); } catch (e) { console.error("Cloud push failed", e); }
+    }
+  }
+}
+
 window.connectCloud = async function () {
   const urlInput = document.getElementById("cloud-url-input");
   const keyInput = document.getElementById("cloud-key-input");
@@ -432,13 +503,7 @@ window.connectCloud = async function () {
   }
   await withLoading(async () => {
     saveCloudConfig({ url, key, passphrase });
-    const cloudLeagues = await cloudPullLeagues();
-    if (cloudLeagues.length > 0) {
-      saveLeagues(cloudLeagues);
-    } else {
-      const local = getLeagues();
-      for (const l of local) { await cloudUpsertLeague(l); }
-    }
+    await mergeWithCloud();
   });
 };
 
@@ -449,10 +514,7 @@ window.disconnectCloud = function () {
 };
 
 window.pullCloudNow = async function () {
-  await withLoading(async () => {
-    const cloudLeagues = await cloudPullLeagues();
-    saveLeagues(cloudLeagues);
-  });
+  await withLoading(async () => { await mergeWithCloud(); });
 };
 
 window.openLeague = function (id) { navigate("league", { leagueId: id, tab: "standings" }); };
@@ -471,6 +533,86 @@ window.onCompareChange = function (side, field, value) {
   render();
 };
 
+/* -------- my team designation -------- */
+window.setMyTeam = async function (leagueId, rosterId) {
+  const leagues = getLeagues();
+  const l = leagues.find(x => x.id === leagueId);
+  if (!l) return;
+  l.myRosterId = rosterId || null;
+  saveLeagues(leagues);
+  if (getCloudConfig()) {
+    try { await cloudUpsertLeague(l); } catch (e) { console.error("Cloud push failed", e); }
+  }
+  render();
+};
+
+/* -------- matchups -------- */
+window.loadMatchups = async function (week) {
+  await withLoading(async () => {
+    if (!week) {
+      const state = await ensureNflState();
+      week = state.week || 1;
+    }
+    const leagues = getLeagues();
+    const cache = {};
+    for (const l of leagues) {
+      try { cache[l.id] = await fetchJSON(`${SLEEPER}/league/${l.id}/matchups/${week}`) || []; }
+      catch (e) { cache[l.id] = []; }
+    }
+    STATE.matchupWeek = week;
+    STATE.matchupsCache = cache;
+  });
+};
+window.goMatchups = function () {
+  navigate("matchups");
+  if (STATE.matchupWeek === null) loadMatchups();
+};
+
+/* -------- trending -------- */
+window.loadTrending = async function (type) {
+  type = type || STATE.trendingType || "add";
+  await withLoading(async () => {
+    if (!PLAYERS) PLAYERS = await ensurePlayers(false);
+    const rows = await fetchJSON(`${SLEEPER}/players/nfl/trending/${type}?lookback_hours=24&limit=25`);
+    STATE.trendingType = type;
+    STATE.trending = rows || [];
+  });
+};
+window.goTrending = function () {
+  navigate("trending");
+  if (!STATE.trending) loadTrending();
+};
+
+/* -------- transactions -------- */
+window.loadTransactions = async function () {
+  await withLoading(async () => {
+    if (!PLAYERS) PLAYERS = await ensurePlayers(false);
+    const state = await ensureNflState();
+    const week = state.week || 1;
+    const leagues = getLeagues();
+    let all = [];
+    for (const l of leagues) {
+      const data = getLeagueData(l.id);
+      if (!data) continue;
+      const weeksToCheck = Array.from(new Set([week, Math.max(1, week - 1)]));
+      for (const w of weeksToCheck) {
+        try {
+          const rows = await fetchJSON(`${SLEEPER}/league/${l.id}/transactions/${w}`);
+          (rows || []).forEach(t => all.push(Object.assign({}, t, {
+            leagueName: l.nickname, leagueUsers: data.users, leagueRosters: data.rosters
+          })));
+        } catch (e) { /* skip */ }
+      }
+    }
+    all.sort((a, b) => (b.created || 0) - (a.created || 0));
+    STATE.transactions = all.slice(0, 50);
+  });
+};
+window.goTransactions = function () {
+  navigate("transactions");
+  if (!STATE.transactions) loadTransactions();
+};
+
 /* =========================================================
    RENDER: SHELL
 ========================================================= */
@@ -486,6 +628,10 @@ function render() {
   else if (STATE.route === "league") body = renderLeagueDetail();
   else if (STATE.route === "finder") body = renderFinder();
   else if (STATE.route === "compare") body = renderCompare();
+  else if (STATE.route === "matchups") body = renderMatchups();
+  else if (STATE.route === "trending") body = renderTrending();
+  else if (STATE.route === "transactions") body = renderTransactions();
+  else if (STATE.route === "needs") body = renderNeeds();
   else body = renderDashboard();
 
   app.appendChild(body);
@@ -506,6 +652,10 @@ function renderHeader() {
       </div>
       <div class="nav">
         <button class="nav-btn ${STATE.route==='dashboard'?'active':''}" onclick="navigate('dashboard')">Dashboard</button>
+        <button class="nav-btn ${STATE.route==='matchups'?'active':''}" onclick="goMatchups()">Matchups</button>
+        <button class="nav-btn ${STATE.route==='transactions'?'active':''}" onclick="goTransactions()">Transactions</button>
+        <button class="nav-btn ${STATE.route==='trending'?'active':''}" onclick="goTrending()">Trending</button>
+        <button class="nav-btn ${STATE.route==='needs'?'active':''}" onclick="navigate('needs')">Needs</button>
         <button class="nav-btn ${STATE.route==='finder'?'active':''}" onclick="navigate('finder')">Player Finder</button>
         <button class="nav-btn ${STATE.route==='compare'?'active':''}" onclick="navigate('compare')">Compare Rosters</button>
       </div>
@@ -519,6 +669,10 @@ function renderHeader() {
 function renderDashboard() {
   const leagues = getLeagues();
   const wrap = document.createElement("div");
+
+  if (!getCloudConfig()) {
+    wrap.appendChild(renderCloudPanel());
+  }
 
   wrap.appendChild(el(`
     <div class="row" style="margin-top:16px;">
@@ -570,7 +724,9 @@ function renderDashboard() {
     </div>
   `));
 
-  wrap.appendChild(renderCloudPanel());
+  if (getCloudConfig()) {
+    wrap.appendChild(renderCloudPanel());
+  }
 
   return wrap;
 }
@@ -632,6 +788,10 @@ function renderLeagueDetail() {
         <div class="muted" style="font-size:12px;">${escapeHtml(data.league.season)} | synced ${fmtTime(data.syncedAt)}</div>
       </div>
       <div class="row">
+        <select onchange="setMyTeam('${STATE.leagueId}', this.value)" style="font-size:12px;">
+          <option value="">My team...</option>
+          ${data.rosters.map(r => `<option value="${r.roster_id}" ${String(meta?.myRosterId)===String(r.roster_id)?"selected":""}>${escapeHtml(teamLabel(r, data.users))}</option>`).join("")}
+        </select>
         <button class="btn btn-sm" onclick="syncOne('${STATE.leagueId}')" ${STATE.loading?"disabled":""}>
           ${STATE.loading ? '<span class="spinner"></span>' : ''} Sync
         </button>
@@ -800,6 +960,214 @@ function renderFinder() {
     wrap.appendChild(card);
   });
 
+  return wrap;
+}
+
+/* =========================================================
+   RENDER: MATCHUPS
+========================================================= */
+function renderMatchups() {
+  const wrap = document.createElement("div");
+  const week = STATE.matchupWeek;
+  wrap.appendChild(el(`
+    <div class="row" style="margin-top:16px; justify-content:space-between;">
+      <div class="row">
+        <span class="muted" style="font-size:12px;">Week</span>
+        <select onchange="loadMatchups(parseInt(this.value))">
+          ${Array.from({length:18},(_,i)=>i+1).map(w=>`<option value="${w}" ${w===week?"selected":""}>${w}</option>`).join("")}
+        </select>
+      </div>
+      <button class="btn btn-sm" onclick="loadMatchups(${week||1})" ${STATE.loading?"disabled":""}>
+        ${STATE.loading ? '<span class="spinner"></span>' : ''} Refresh
+      </button>
+    </div>
+  `));
+
+  const leagues = getLeagues();
+  if (leagues.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Add a league first.</p></div>`));
+    return wrap;
+  }
+
+  leagues.forEach(l => {
+    const data = getLeagueData(l.id);
+    if (!data) return;
+    const matchups = (STATE.matchupsCache && STATE.matchupsCache[l.id]) || [];
+    const groups = {};
+    matchups.forEach(m => { (groups[m.matchup_id] = groups[m.matchup_id] || []).push(m); });
+
+    wrap.appendChild(el(`<div style="font-weight:700; margin:18px 0 8px;">${escapeHtml(l.nickname)}</div>`));
+    const grid = document.createElement("div");
+    grid.className = "roster-grid";
+    const pairs = Object.values(groups);
+    if (pairs.length === 0) {
+      grid.appendChild(el(`<div class="muted" style="font-size:12px;">No matchup data for week ${week || "?"} yet.</div>`));
+    } else {
+      pairs.forEach(pair => {
+        const [a, b] = pair;
+        const rosterA = data.rosters.find(r => r.roster_id === a.roster_id);
+        const rosterB = b ? data.rosters.find(r => r.roster_id === b.roster_id) : null;
+        grid.appendChild(el(matchupCardHtml(a, rosterA, b, rosterB, data.users)));
+      });
+    }
+    wrap.appendChild(grid);
+  });
+
+  return wrap;
+}
+function matchupCardHtml(a, rosterA, b, rosterB, users) {
+  const nameA = rosterA ? teamLabel(rosterA, users) : `Roster ${a.roster_id}`;
+  const nameB = rosterB ? teamLabel(rosterB, users) : (b ? `Roster ${b.roster_id}` : "Bye");
+  const ptsA = (a.points || 0).toFixed(2);
+  const ptsB = b ? (b.points || 0).toFixed(2) : "-";
+  const diff = b ? Math.abs((a.points || 0) - (b.points || 0)) : null;
+  return `
+    <div class="rcard">
+      <div class="prow" style="justify-content:space-between;"><span class="pname" style="font-weight:600;">${escapeHtml(nameA)}</span><span class="mono" style="font-weight:800;">${ptsA}</span></div>
+      <div class="prow" style="justify-content:space-between;"><span class="pname" style="font-weight:600;">${escapeHtml(nameB)}</span><span class="mono" style="font-weight:800;">${ptsB}</span></div>
+      ${diff !== null ? `<div class="muted mono" style="font-size:11px; margin-top:6px;">Margin: ${diff.toFixed(2)}</div>` : ""}
+    </div>`;
+}
+
+/* =========================================================
+   RENDER: TRENDING (league-wide, all of Sleeper)
+========================================================= */
+function renderTrending() {
+  const wrap = document.createElement("div");
+  wrap.appendChild(el(`
+    <div class="row" style="margin-top:16px; justify-content:space-between;">
+      <div class="row">
+        <button class="btn btn-sm ${STATE.trendingType==='add'?'btn-primary':''}" onclick="loadTrending('add')">Trending Adds</button>
+        <button class="btn btn-sm ${STATE.trendingType==='drop'?'btn-primary':''}" onclick="loadTrending('drop')">Trending Drops</button>
+      </div>
+      <span class="muted" style="font-size:11px;">Last 24h, all of Sleeper</span>
+    </div>
+  `));
+
+  if (STATE.loading || !STATE.trending) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Loading trending players...</p></div>`));
+    return wrap;
+  }
+
+  const panel = document.createElement("div");
+  panel.className = "panel";
+  panel.innerHTML = `
+    <table>
+      <thead><tr><th style="width:32px;">#</th><th>Player</th><th class="num">${STATE.trendingType==='add'?'Adds':'Drops'}</th></tr></thead>
+      <tbody>
+        ${STATE.trending.map((r,i) => {
+          const p = PLAYERS ? PLAYERS[r.player_id] : null;
+          const badge = badgeInfo(p);
+          return `<tr>
+            <td class="rank">${i+1}</td>
+            <td>${escapeHtml(playerName(p, r.player_id))} <span class="pbadge" style="background:${badge.color}">${badge.label}</span></td>
+            <td class="num mono">${r.count}</td>
+          </tr>`;
+        }).join("")}
+      </tbody>
+    </table>`;
+  wrap.appendChild(panel);
+  return wrap;
+}
+
+/* =========================================================
+   RENDER: TRANSACTIONS
+========================================================= */
+function renderTransactions() {
+  const wrap = document.createElement("div");
+  wrap.appendChild(el(`
+    <div class="row" style="margin-top:16px; justify-content:space-between;">
+      <span class="muted" style="font-size:12px;">Latest across saved leagues (current + previous week)</span>
+      <button class="btn btn-sm" onclick="loadTransactions()" ${STATE.loading?"disabled":""}>
+        ${STATE.loading ? '<span class="spinner"></span>' : ''} Refresh
+      </button>
+    </div>
+  `));
+
+  if (STATE.loading || !STATE.transactions) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Loading transactions...</p></div>`));
+    return wrap;
+  }
+  if (STATE.transactions.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>No recent transactions found.</p></div>`));
+    return wrap;
+  }
+  STATE.transactions.forEach(t => wrap.appendChild(el(transactionCardHtml(t))));
+  return wrap;
+}
+function rosterOwnerName(rosterId, rosters, users) {
+  const r = rosters.find(x => x.roster_id === rosterId);
+  return r ? teamLabel(r, users) : `Roster ${rosterId}`;
+}
+function transactionCardHtml(t) {
+  const adds = t.adds || {};
+  const drops = t.drops || {};
+  const addRows = Object.keys(adds).map(pid => {
+    const p = PLAYERS ? PLAYERS[pid] : null;
+    return `<div class="prow"><span style="color:var(--win);">+ ${escapeHtml(playerName(p, pid))}</span><span class="muted" style="margin-left:auto; font-size:11px;">${escapeHtml(rosterOwnerName(adds[pid], t.leagueRosters, t.leagueUsers))}</span></div>`;
+  });
+  const dropRows = Object.keys(drops).map(pid => {
+    const p = PLAYERS ? PLAYERS[pid] : null;
+    return `<div class="prow"><span style="color:var(--loss);">- ${escapeHtml(playerName(p, pid))}</span><span class="muted" style="margin-left:auto; font-size:11px;">${escapeHtml(rosterOwnerName(drops[pid], t.leagueRosters, t.leagueUsers))}</span></div>`;
+  });
+  const typeLabel = t.type === "waiver" ? "Waiver" : t.type === "trade" ? "Trade" : "Free Agent";
+  return `
+    <div class="finder-result">
+      <div class="row" style="justify-content:space-between;">
+        <span style="font-weight:700; font-size:12.5px;">${escapeHtml(t.leagueName)} - ${typeLabel}</span>
+        <span class="muted mono" style="font-size:10.5px;">${fmtTime(t.created)}</span>
+      </div>
+      <div style="margin-top:6px;">
+        ${addRows.join("") || dropRows.join("") ? (addRows.join("") + dropRows.join("")) : '<span class="muted" style="font-size:12px;">No player changes recorded.</span>'}
+      </div>
+    </div>`;
+}
+
+/* =========================================================
+   RENDER: POSITIONAL NEEDS (across leagues with "My team" set)
+========================================================= */
+function renderNeeds() {
+  const wrap = document.createElement("div");
+  const allLeagues = getLeagues();
+  const withTeam = allLeagues.filter(l => l.myRosterId && getLeagueData(l.id));
+  const withoutTeam = allLeagues.filter(l => !l.myRosterId && getLeagueData(l.id));
+
+  if (withoutTeam.length > 0) {
+    wrap.appendChild(el(`
+      <div class="banner-error" style="color:var(--gold); background:rgba(215,165,62,0.08); border-color:rgba(215,165,62,0.3); margin-top:16px;">
+        Set "My team" on ${withoutTeam.map(l => escapeHtml(l.nickname)).join(", ")} to see ${withoutTeam.length>1?"their":"its"} needs here - open the league and use the picker at the top.
+      </div>
+    `));
+  }
+
+  if (withTeam.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>No teams set yet. Open a league and set "My team" at the top to see positional needs here.</p></div>`));
+    return wrap;
+  }
+
+  const grid = document.createElement("div");
+  grid.className = "roster-grid";
+  withTeam.forEach(l => {
+    const data = getLeagueData(l.id);
+    const roster = data.rosters.find(r => String(r.roster_id) === String(l.myRosterId));
+    if (!roster) return;
+    const needs = computeNeeds(data.league, roster);
+    grid.appendChild(el(`
+      <div class="rcard">
+        <div class="rcard-head">
+          <span class="rcard-title">${escapeHtml(l.nickname)}</span>
+          <span class="rcard-count">${escapeHtml(teamLabel(roster, data.users))}</span>
+        </div>
+        ${needs.map(n => `
+          <div class="prow" style="justify-content:space-between;">
+            <span class="pname">${n.pos}</span>
+            <span class="muted mono" style="font-size:10.5px;">${n.total} rostered${n.deficient ? " - short" : ""}</span>
+            <span class="pbadge" style="background:${n.color}; color:#10160e;">${n.level}</span>
+          </div>`).join("")}
+      </div>
+    `));
+  });
+  wrap.appendChild(grid);
   return wrap;
 }
 
