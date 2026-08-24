@@ -827,6 +827,51 @@ window.goTransactions = function () {
   if (!STATE.transactions) loadTransactions();
 };
 
+/* -------- live draft -------- */
+window.loadDrafts = async function () {
+  await withLoading(async () => {
+    if (!PLAYERS) PLAYERS = await ensurePlayers(false);
+    const leagues = getLeagues().filter(l => l.source !== "manual");
+    const draftsByLeague = {};
+    for (const l of leagues) {
+      try { draftsByLeague[l.id] = await fetchJSON(`${SLEEPER}/league/${l.id}/drafts`) || []; }
+      catch (e) { draftsByLeague[l.id] = []; }
+    }
+    const picksByDraft = {};
+    for (const id in draftsByLeague) {
+      for (const d of draftsByLeague[id]) {
+        if (d.status === "drafting") {
+          try { picksByDraft[d.draft_id] = await fetchJSON(`${SLEEPER}/draft/${d.draft_id}/picks`) || []; }
+          catch (e) { picksByDraft[d.draft_id] = []; }
+        }
+      }
+    }
+    STATE.draftsByLeague = draftsByLeague;
+    STATE.picksByDraft = picksByDraft;
+    STATE.draftsLoaded = true;
+  });
+};
+window.goDraft = function () {
+  navigate("draft");
+  loadDrafts();
+  if (draftPollInterval) clearInterval(draftPollInterval);
+  draftPollInterval = setInterval(() => {
+    if (STATE.route === "draft") loadDrafts();
+  }, 15000);
+};
+
+function draftStatusLabel(status) {
+  if (status === "drafting") return "Live";
+  if (status === "pre_draft") return "Scheduled";
+  if (status === "complete") return "Complete";
+  return status || "Unknown";
+}
+function fmtDraftTime(ts) {
+  if (!ts) return "Not scheduled";
+  const d = new Date(ts);
+  return d.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) + " " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
 /* =========================================================
    RENDER: SHELL
 ========================================================= */
@@ -846,6 +891,7 @@ function render() {
   else if (STATE.route === "matchups") body = renderMatchups();
   else if (STATE.route === "trending") body = renderTrending();
   else if (STATE.route === "transactions") body = renderTransactions();
+  else if (STATE.route === "draft") body = renderDraftTab();
   else if (STATE.route === "needs") body = renderNeeds();
   else if (STATE.route === "exposure") body = renderExposure();
   else body = renderDashboard();
@@ -873,6 +919,7 @@ function renderHeader() {
         <button class="nav-btn ${STATE.route==='sync'?'active':''}" onclick="navigate('sync')">Sync Leagues</button>
         <button class="nav-btn ${STATE.route==='matchups'?'active':''}" onclick="goMatchups()">Matchups</button>
         <button class="nav-btn ${STATE.route==='transactions'?'active':''}" onclick="goTransactions()">Transactions</button>
+        <button class="nav-btn ${STATE.route==='draft'?'active':''}" onclick="goDraft()">Live Draft</button>
         <button class="nav-btn ${STATE.route==='trending'?'active':''}" onclick="goTrending()">Trending</button>
         <button class="nav-btn ${STATE.route==='needs'?'active':''}" onclick="navigate('needs')">Needs</button>
         <button class="nav-btn ${STATE.route==='exposure'?'active':''}" onclick="navigate('exposure')">Exposure</button>
@@ -1420,6 +1467,118 @@ function renderTransactions() {
   STATE.transactions.forEach(t => wrap.appendChild(el(transactionCardHtml(t))));
   return wrap;
 }
+
+/* =========================================================
+   RENDER: LIVE DRAFT
+========================================================= */
+function renderDraftTab() {
+  const wrap = document.createElement("div");
+  wrap.appendChild(el(`
+    <div class="row" style="margin-top:16px; justify-content:space-between;">
+      <span class="muted" style="font-size:12px;">Draft schedule across your leagues - auto-refreshes every 15s while live drafts are running</span>
+      <button class="btn btn-sm" onclick="loadDrafts()" ${STATE.loading?"disabled":""}>
+        ${STATE.loading ? '<span class="spinner"></span>' : ''} Refresh
+      </button>
+    </div>
+  `));
+
+  const leagues = getLeagues().filter(l => l.source !== "manual" && !isDismissedByMe(l));
+  if (leagues.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Add a Sleeper league first.</p></div>`));
+    return wrap;
+  }
+  if (!STATE.draftsLoaded) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Loading drafts...</p></div>`));
+    return wrap;
+  }
+
+  const entries = [];
+  leagues.forEach(l => {
+    const drafts = (STATE.draftsByLeague && STATE.draftsByLeague[l.id]) || [];
+    drafts.forEach(d => entries.push({ league: l, draft: d }));
+  });
+
+  if (entries.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>No draft data found for your leagues yet.</p></div>`));
+    return wrap;
+  }
+
+  const live = entries.filter(e => e.draft.status === "drafting");
+  const upcoming = entries.filter(e => e.draft.status === "pre_draft")
+    .sort((a, b) => (a.draft.start_time || 0) - (b.draft.start_time || 0));
+  const done = entries.filter(e => e.draft.status === "complete")
+    .sort((a, b) => (b.draft.start_time || 0) - (a.draft.start_time || 0));
+
+  if (live.length > 0) {
+    wrap.appendChild(el(`<div style="font-weight:700; margin:18px 0 8px; color:var(--gold);">Live now</div>`));
+    live.forEach(e => wrap.appendChild(el(liveDraftCardHtml(e.league, e.draft))));
+  }
+
+  wrap.appendChild(el(`<div style="font-weight:700; margin:18px 0 8px;">Upcoming</div>`));
+  if (upcoming.length === 0) {
+    wrap.appendChild(el(`<div class="muted" style="font-size:12px;">No scheduled drafts.</div>`));
+  } else {
+    const panel = document.createElement("div");
+    panel.className = "panel";
+    panel.innerHTML = `
+      <table>
+        <thead><tr><th>League</th><th>Status</th><th class="num">Date</th></tr></thead>
+        <tbody>
+          ${upcoming.map(e => `
+            <tr>
+              <td>${escapeHtml(e.league.nickname)}</td>
+              <td>${draftStatusLabel(e.draft.status)}</td>
+              <td class="num mono">${fmtDraftTime(e.draft.start_time)}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+    wrap.appendChild(panel);
+  }
+
+  if (done.length > 0) {
+    wrap.appendChild(el(`<div style="font-weight:700; margin:18px 0 8px;">Completed</div>`));
+    const panel = document.createElement("div");
+    panel.className = "panel";
+    panel.innerHTML = `
+      <table>
+        <thead><tr><th>League</th><th class="num">Date</th></tr></thead>
+        <tbody>
+          ${done.map(e => `
+            <tr>
+              <td>${escapeHtml(e.league.nickname)}</td>
+              <td class="num mono">${fmtDraftTime(e.draft.start_time)}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+    wrap.appendChild(panel);
+  }
+
+  return wrap;
+}
+
+function liveDraftCardHtml(league, draft) {
+  const picks = (STATE.picksByDraft && STATE.picksByDraft[draft.draft_id]) || [];
+  const recent = picks.slice(-8).reverse();
+  return `
+    <div class="panel" style="padding:14px; margin-bottom:14px; border-color: var(--gold);">
+      <div class="row" style="justify-content:space-between;">
+        <span style="font-weight:700;">${escapeHtml(league.nickname)}</span>
+        <span class="pbadge" style="background:var(--gold);">LIVE</span>
+      </div>
+      <div class="muted" style="font-size:11px; margin-top:4px;">${picks.length} pick${picks.length===1?"":"s"} made</div>
+      <div style="margin-top:8px;">
+        ${recent.map(p => {
+          const pl = PLAYERS ? PLAYERS[p.player_id] : null;
+          const badge = badgeInfo(pl);
+          return `<div class="prow" style="justify-content:space-between;">
+            <span class="pname">R${p.round}.${String(p.pick_no||"").padStart(2,"0")} - ${escapeHtml(playerName(pl, p.player_id))}</span>
+            <span class="pbadge" style="background:${badge.color}">${badge.label}</span>
+          </div>`;
+        }).join("") || '<div class="muted" style="font-size:12px;">No picks yet.</div>'}
+      </div>
+    </div>`;
+}
+
 function rosterOwnerName(rosterId, rosters, users) {
   const r = rosters.find(x => x.roster_id === rosterId);
   return r ? teamLabel(r, users) : `Roster ${rosterId}`;
