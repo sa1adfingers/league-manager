@@ -1556,9 +1556,45 @@ function renderDraftTab() {
   return wrap;
 }
 
+function findMySlot(draft, myRosterId) {
+  if (!myRosterId || !draft.slot_to_roster_id) return null;
+  const entry = Object.entries(draft.slot_to_roster_id).find(([, rid]) => String(rid) === String(myRosterId));
+  return entry ? parseInt(entry[0], 10) : null;
+}
+
+function computePicksUntilMe(teams, madeCount, mySlot) {
+  if (!teams || !mySlot) return null;
+  const nextPickNo = madeCount + 1;
+  for (let pickNo = nextPickNo; pickNo <= nextPickNo + teams * 3; pickNo++) {
+    const round = Math.ceil(pickNo / teams);
+    const posInRound = pickNo - (round - 1) * teams;
+    const slotAtThisPick = (round % 2 === 1) ? posInRound : (teams - posInRound + 1);
+    if (slotAtThisPick === mySlot) {
+      return { picksUntil: pickNo - nextPickNo, isNow: pickNo === nextPickNo, round, posInRound };
+    }
+  }
+  return null;
+}
+
 function liveDraftCardHtml(league, draft) {
   const picks = (STATE.picksByDraft && STATE.picksByDraft[draft.draft_id]) || [];
   const recent = picks.slice(-8).reverse();
+  const data = getLeagueData(league.id);
+  const teams = draft.settings?.teams || (data ? data.rosters.length : 0) || 0;
+
+  const myRosterId = myTeamFor(league);
+  const mySlot = findMySlot(draft, myRosterId);
+  const onClock = computePicksUntilMe(teams, picks.length, mySlot);
+
+  let notifier = "";
+  if (onClock) {
+    if (onClock.isNow) {
+      notifier = `<div style="margin-top:8px; padding:8px 10px; border-radius:8px; background:var(--gold); color:#1a1305; font-weight:800; font-size:13px;">You're on the clock!</div>`;
+    } else {
+      notifier = `<div class="muted mono" style="margin-top:8px; font-size:11px;">${onClock.picksUntil} pick${onClock.picksUntil===1?"":"s"} until you're on the clock (Round ${onClock.round}, Pick ${onClock.posInRound})</div>`;
+    }
+  }
+
   return `
     <div class="panel" style="padding:14px; margin-bottom:14px; border-color: var(--gold);">
       <div class="row" style="justify-content:space-between;">
@@ -1566,12 +1602,17 @@ function liveDraftCardHtml(league, draft) {
         <span class="pbadge" style="background:var(--gold);">LIVE</span>
       </div>
       <div class="muted" style="font-size:11px; margin-top:4px;">${picks.length} pick${picks.length===1?"":"s"} made</div>
+      ${notifier}
       <div style="margin-top:8px;">
         ${recent.map(p => {
           const pl = PLAYERS ? PLAYERS[p.player_id] : null;
           const badge = badgeInfo(pl);
+          const posInRound = teams ? (p.pick_no - (p.round - 1) * teams) : p.pick_no;
+          const teamName = data ? rosterOwnerName(p.roster_id, data.rosters, data.users) : `Roster ${p.roster_id}`;
           return `<div class="prow" style="justify-content:space-between;">
-            <span class="pname">R${p.round}.${String(p.pick_no||"").padStart(2,"0")} - ${escapeHtml(playerName(pl, p.player_id))}</span>
+            <span class="pname">R${p.round}.${String(posInRound||"").padStart(2,"0")} - ${escapeHtml(playerName(pl, p.player_id))}
+              <span class="muted" style="font-size:10px;">(${escapeHtml(teamName)})</span>
+            </span>
             <span class="pbadge" style="background:${badge.color}">${badge.label}</span>
           </div>`;
         }).join("") || '<div class="muted" style="font-size:12px;">No picks yet.</div>'}
