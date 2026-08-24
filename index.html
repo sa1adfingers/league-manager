@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
-<title>League Manager</title>
+<title>Fantasy Football Dynasty League Manager</title>
 <style>
   :root {
     --bg: #101c16;
@@ -223,13 +223,13 @@ async function cloudFetch(path, options) {
 }
 async function cloudPullLeagues() {
   const rows = await cloudFetch("leagues?select=*");
-  return (rows || []).map(r => ({ id: r.id, nickname: r.nickname, addedAt: r.added_at, teams: r.teams || {} }));
+  return (rows || []).map(r => ({ id: r.id, nickname: r.nickname, addedAt: r.added_at, teams: r.teams || {}, source: r.source || "sleeper" }));
 }
 async function cloudUpsertLeague(l) {
   await cloudFetch("leagues?on_conflict=id", {
     method: "POST",
     headers: { Prefer: "resolution=merge-duplicates" },
-    body: JSON.stringify([{ id: l.id, nickname: l.nickname, added_at: l.addedAt || Date.now(), teams: l.teams || {} }])
+    body: JSON.stringify([{ id: l.id, nickname: l.nickname, added_at: l.addedAt || Date.now(), teams: l.teams || {}, source: l.source || "sleeper" }])
   });
 }
 async function cloudDeleteLeague(id) {
@@ -407,10 +407,12 @@ let STATE = {
   error: null,
   matchupWeek: null,
   matchupsCache: {},
+  matchupsMyOnly: false,
   trending: null,
   trendingType: "add",
   transactions: null,
   exposureFilter: "",
+  finderQuery: "",
 };
 
 function setState(patch) { Object.assign(STATE, patch); render(); }
@@ -432,15 +434,21 @@ async function withLoading(fn) {
 /* -------- actions exposed to inline handlers -------- */
 window.addLeague = async function () {
   const input = document.getElementById("add-league-input");
+  const sourceSelect = document.getElementById("add-league-source");
+  const source = (sourceSelect && sourceSelect.value) || "sleeper";
   const id = (input.value || "").trim();
   if (!id) return;
+  if (source !== "sleeper") {
+    setState({ error: "That source isn't wired up yet - only Sleeper works right now." });
+    return;
+  }
   await withLoading(async () => {
     const data = await syncLeagueData(id);
     if (!PLAYERS) PLAYERS = await ensurePlayers(false);
     const leagues = getLeagues();
     let entry = leagues.find(l => l.id === id);
     if (!entry) {
-      entry = { id, nickname: data.league.name || id, addedAt: Date.now() };
+      entry = { id, nickname: data.league.name || id, addedAt: Date.now(), source };
       leagues.push(entry);
       saveLeagues(leagues);
     }
@@ -552,8 +560,12 @@ window.setRosterFilter = function (v) { STATE.rosterFilter = v; renderRosterGrid
 
 let searchDebounce = null;
 window.onFinderInput = function (v) {
+  STATE.finderQuery = v;
   clearTimeout(searchDebounce);
-  searchDebounce = setTimeout(() => { STATE.finderQuery = v; render(); }, 150);
+  searchDebounce = setTimeout(() => {
+    const results = document.getElementById("finder-results");
+    if (results) results.innerHTML = finderResultsHtml();
+  }, 150);
 };
 
 window.onCompareChange = function (side, field, value) {
@@ -613,6 +625,10 @@ window.goMatchups = function () {
   navigate("matchups");
   if (STATE.matchupWeek === null) loadMatchups();
 };
+window.toggleMatchupsMyOnly = function () {
+  STATE.matchupsMyOnly = !STATE.matchupsMyOnly;
+  render();
+};
 
 /* -------- trending -------- */
 window.loadTrending = async function (type) {
@@ -671,6 +687,7 @@ function render() {
 
   let body;
   if (STATE.route === "dashboard") body = renderDashboard();
+  else if (STATE.route === "sync") body = renderSync();
   else if (STATE.route === "league") body = renderLeagueDetail();
   else if (STATE.route === "finder") body = renderFinder();
   else if (STATE.route === "compare") body = renderCompare();
@@ -691,8 +708,8 @@ function renderHeader() {
     <div>
       <div class="topbar">
         <div>
-          <div class="brand-eyebrow">SLEEPER SYNC</div>
-          <h1 class="brand-title">League Manager</h1>
+          <div class="brand-eyebrow">DYNASTY</div>
+          <h1 class="brand-title">Fantasy Football Dynasty League Manager</h1>
         </div>
         <div class="row">
           <button class="btn btn-sm" onclick="changeProfile()">${profile ? "Viewing as " + escapeHtml(profile) : "Set your name"}</button>
@@ -701,6 +718,7 @@ function renderHeader() {
       </div>
       <div class="nav">
         <button class="nav-btn ${STATE.route==='dashboard'?'active':''}" onclick="navigate('dashboard')">Dashboard</button>
+        <button class="nav-btn ${STATE.route==='sync'?'active':''}" onclick="navigate('sync')">Sync Leagues</button>
         <button class="nav-btn ${STATE.route==='matchups'?'active':''}" onclick="goMatchups()">Matchups</button>
         <button class="nav-btn ${STATE.route==='transactions'?'active':''}" onclick="goTransactions()">Transactions</button>
         <button class="nav-btn ${STATE.route==='trending'?'active':''}" onclick="goTrending()">Trending</button>
@@ -720,37 +738,21 @@ function renderDashboard() {
   const leagues = getLeagues();
   const wrap = document.createElement("div");
 
-  if (!getCloudConfig()) {
-    wrap.appendChild(renderCloudPanel());
-  }
-
   const profile = getProfile();
   if (!profile && leagues.length > 0) {
     wrap.appendChild(el(`
       <div class="banner-error" style="color:var(--gold); background:rgba(215,165,62,0.08); border-color:rgba(215,165,62,0.3); margin-top:16px;">
-        Set your name (top right) so you can claim which team is yours in each league below.
+        Set your name (top right) so you can claim which team is yours in each league - manage that from the Sync Leagues tab.
       </div>
     `));
   }
-
-  const claimPanel = renderClaimTeamsPanel();
-  if (claimPanel) wrap.appendChild(claimPanel);
-
-  wrap.appendChild(el(`
-    <div class="row" style="margin-top:16px;">
-      <input id="add-league-input" type="text" placeholder="Paste a Sleeper league ID..." style="flex:1; min-width:220px;"
-        onkeydown="if(event.key==='Enter') addLeague()" />
-      <button class="btn btn-primary" onclick="addLeague()" ${STATE.loading?"disabled":""}>
-        ${STATE.loading ? '<span class="spinner"></span>' : '+'} Add league
-      </button>
-    </div>
-  `));
 
   if (leagues.length === 0) {
     wrap.appendChild(el(`
       <div class="empty-state">
         <p>No leagues saved yet.</p>
-        <p class="muted">Paste a Sleeper league ID above - find it in your league's URL on sleeper.com. If someone else already added leagues and you've connected cloud sync, they'll show up here automatically.</p>
+        <p class="muted">Head to the Sync Leagues tab to add one, or connect cloud sync if someone else already has.</p>
+        <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick="navigate('sync')">Go to Sync Leagues</button>
       </div>
     `));
     return wrap;
@@ -767,6 +769,7 @@ function renderDashboard() {
     return wrap;
   }
 
+  wrap.appendChild(el(`<div style="margin-top:16px;"></div>`));
   const grid = document.createElement("div");
   grid.className = "league-grid";
   visibleLeagues.forEach(l => {
@@ -777,7 +780,7 @@ function renderDashboard() {
     const mine = myIdx >= 0 ? standings[myIdx] : null;
     grid.appendChild(el(`
       <div class="league-card" onclick="openLeague('${l.id}')">
-        <div class="league-card-title">${escapeHtml(l.nickname)}</div>
+        <div class="league-card-title">${escapeHtml(l.nickname)} <span class="muted mono" style="font-size:9.5px;">${escapeHtml((l.source||"sleeper").toUpperCase())}</span></div>
         <div class="league-card-sub">${data ? escapeHtml(data.league.season) + " | " + data.rosters.length + " teams" : "Not synced yet"}</div>
         ${top ? `<div class="league-card-row"><span>Leader</span><span>${escapeHtml(top.name)} (${top.wins}-${top.losses}${top.ties?`-${top.ties}`:""})</span></div>` : ""}
         ${mine ? `<div class="league-card-row"><span>My Team</span><span>${escapeHtml(mine.name)} (${mine.wins}-${mine.losses}${mine.ties?`-${mine.ties}`:""}) - #${myIdx+1}</span></div>` : ""}
@@ -792,17 +795,51 @@ function renderDashboard() {
   });
   wrap.appendChild(grid);
 
-  const pc = getPlayersCache();
+  return wrap;
+}
+
+/* =========================================================
+   RENDER: SYNC LEAGUES (add sources, cloud sync, claim teams,
+   player DB - everything about *managing* your leagues lives
+   here so the Dashboard stays a clean read of standings)
+========================================================= */
+function renderSync() {
+  const wrap = document.createElement("div");
+
   wrap.appendChild(el(`
-    <div class="row" style="margin-top:18px; justify-content:space-between;">
-      <span class="muted mono" style="font-size:11px;">Player database updated ${fmtTime(pc?.updatedAt)}</span>
-      <button class="btn btn-sm" onclick="refreshPlayers()">Refresh player DB</button>
+    <div class="panel" style="padding:14px; margin-top:16px;">
+      <div style="font-size:13px; font-weight:700; margin-bottom:4px;">Add a league</div>
+      <div class="muted" style="font-size:11.5px; margin-bottom:10px;">
+        More platforms are planned - for now, Sleeper is the only source.
+      </div>
+      <div class="row">
+        <select id="add-league-source" style="font-size:13px;">
+          <option value="sleeper">Sleeper</option>
+          <option value="espn" disabled>ESPN (coming soon)</option>
+          <option value="yahoo" disabled>Yahoo (coming soon)</option>
+          <option value="mfl" disabled>MFL (coming soon)</option>
+        </select>
+        <input id="add-league-input" type="text" placeholder="Paste a Sleeper league ID..." style="flex:1; min-width:220px;"
+          onkeydown="if(event.key==='Enter') addLeague()" />
+        <button class="btn btn-primary" onclick="addLeague()" ${STATE.loading?"disabled":""}>
+          ${STATE.loading ? '<span class="spinner"></span>' : '+'} Add league
+        </button>
+      </div>
     </div>
   `));
 
-  if (getCloudConfig()) {
-    wrap.appendChild(renderCloudPanel());
-  }
+  wrap.appendChild(renderCloudPanel());
+
+  const claimPanel = renderClaimTeamsPanel();
+  if (claimPanel) wrap.appendChild(claimPanel);
+
+  const pc = getPlayersCache();
+  wrap.appendChild(el(`
+    <div class="row" style="margin-top:14px; justify-content:space-between;">
+      <span class="muted mono" style="font-size:11px;">Sleeper player database updated ${fmtTime(pc?.updatedAt)}</span>
+      <button class="btn btn-sm" onclick="refreshPlayers()">Refresh player DB</button>
+    </div>
+  `));
 
   return wrap;
 }
@@ -1015,19 +1052,25 @@ function renderFinder() {
   const wrap = document.createElement("div");
   wrap.appendChild(el(`
     <div style="margin-top:16px;">
-      <input type="text" placeholder="Search a player across every saved league..." style="width:100%;"
-        oninput="onFinderInput(this.value)" />
+      <input id="finder-input" type="text" placeholder="Search a player across every saved league..." style="width:100%;"
+        oninput="onFinderInput(this.value)" value="${escapeHtml(STATE.finderQuery || "")}" />
     </div>
   `));
+  const results = document.createElement("div");
+  results.id = "finder-results";
+  results.innerHTML = finderResultsHtml();
+  wrap.appendChild(results);
+  return wrap;
+}
 
+function finderResultsHtml() {
   const q = (STATE.finderQuery || "").trim().toLowerCase();
   if (!q) {
-    wrap.appendChild(el(`<div class="empty-state"><p>Type a name to see who owns them across your leagues.</p></div>`));
-    return wrap;
+    return `<div class="empty-state"><p>Type a name to see who owns them across your leagues.</p></div>`;
   }
 
   const leagues = getLeagues();
-  // playerId -> { name, badge, hits: [{leagueName, leagueId, teamName, status}] }
+  // playerId -> { name, badge, hits: [{leagueName, teamName, status}] }
   const hitsByPlayer = {};
 
   leagues.forEach(l => {
@@ -1052,13 +1095,12 @@ function renderFinder() {
 
   const ids = Object.keys(hitsByPlayer);
   if (ids.length === 0) {
-    wrap.appendChild(el(`<div class="empty-state"><p>No matches in your saved leagues.</p></div>`));
-    return wrap;
+    return `<div class="empty-state"><p>No matches in your saved leagues.</p></div>`;
   }
 
-  ids.forEach(id => {
+  return ids.map(id => {
     const entry = hitsByPlayer[id];
-    const card = el(`
+    return `
       <div class="finder-result">
         <div class="row" style="justify-content:space-between;">
           <span class="finder-player-name">${escapeHtml(entry.name)}</span>
@@ -1069,12 +1111,8 @@ function renderFinder() {
             <span>${escapeHtml(h.leagueName)} - ${escapeHtml(h.teamName)}</span>
             <span class="muted">${h.status}</span>
           </div>`).join("")}
-      </div>
-    `);
-    wrap.appendChild(card);
-  });
-
-  return wrap;
+      </div>`;
+  }).join("");
 }
 
 /* =========================================================
@@ -1090,6 +1128,9 @@ function renderMatchups() {
         <select onchange="loadMatchups(parseInt(this.value))">
           ${Array.from({length:18},(_,i)=>i+1).map(w=>`<option value="${w}" ${w===week?"selected":""}>${w}</option>`).join("")}
         </select>
+        <button class="btn btn-sm ${STATE.matchupsMyOnly?'btn-primary':''}" onclick="toggleMatchupsMyOnly()">
+          ${STATE.matchupsMyOnly ? "My matchups only" : "All matchups"}
+        </button>
       </div>
       <button class="btn btn-sm" onclick="loadMatchups(${week||1})" ${STATE.loading?"disabled":""}>
         ${STATE.loading ? '<span class="spinner"></span>' : ''} Refresh
@@ -1103,17 +1144,26 @@ function renderMatchups() {
     return wrap;
   }
 
+  let anyShown = false;
   leagues.forEach(l => {
     const data = getLeagueData(l.id);
     if (!data) return;
     const matchups = (STATE.matchupsCache && STATE.matchupsCache[l.id]) || [];
     const groups = {};
     matchups.forEach(m => { (groups[m.matchup_id] = groups[m.matchup_id] || []).push(m); });
+    let pairs = Object.values(groups);
 
+    if (STATE.matchupsMyOnly) {
+      const myRosterId = myTeamFor(l);
+      if (!myRosterId) return; // no team set here, nothing to show in "my only" mode
+      pairs = pairs.filter(pair => pair.some(m => String(m.roster_id) === String(myRosterId)));
+      if (pairs.length === 0) return; // bye week or not synced yet for this league
+    }
+
+    anyShown = true;
     wrap.appendChild(el(`<div style="font-weight:700; margin:18px 0 8px;">${escapeHtml(l.nickname)}</div>`));
     const grid = document.createElement("div");
     grid.className = "roster-grid";
-    const pairs = Object.values(groups);
     if (pairs.length === 0) {
       grid.appendChild(el(`<div class="muted" style="font-size:12px;">No matchup data for week ${week || "?"} yet.</div>`));
     } else {
@@ -1126,6 +1176,10 @@ function renderMatchups() {
     }
     wrap.appendChild(grid);
   });
+
+  if (!anyShown) {
+    wrap.appendChild(el(`<div class="empty-state"><p>${STATE.matchupsMyOnly ? 'No teams set yet, or no matchup data loaded for week ' + (week || '?') + '.' : 'No matchup data for this week yet.'}</p></div>`));
+  }
 
   return wrap;
 }
@@ -1290,6 +1344,14 @@ function renderNeeds() {
 ========================================================= */
 window.setExposureFilter = function (v) { STATE.exposureFilter = v; render(); };
 
+function leagueSupportsPosition(league, posGroup) {
+  const slots = (league && league.roster_positions) || [];
+  if (slots.includes(posGroup)) return true;
+  if (["DL","LB","DB"].includes(posGroup) && slots.includes("IDP_FLEX")) return true;
+  if (["QB","RB","WR","TE"].includes(posGroup) && (slots.includes("FLEX") || slots.includes("SUPER_FLEX"))) return true;
+  return false;
+}
+
 function renderExposure() {
   const wrap = document.createElement("div");
   const leagues = getLeagues().filter(l => myTeamFor(l) && getLeagueData(l.id));
@@ -1300,6 +1362,13 @@ function renderExposure() {
   }
 
   const totalTeams = leagues.length;
+  // How many of "my" teams even support each position group - a league with no
+  // IDP slots at all shouldn't dilute an LB's exposure percentage, for example.
+  const posGroupTeamCount = {};
+  POS_GROUPS.forEach(pg => {
+    posGroupTeamCount[pg] = leagues.filter(l => leagueSupportsPosition(getLeagueData(l.id).league, pg)).length;
+  });
+
   const counts = {}; // playerId -> { count, leagueNames: [] }
   leagues.forEach(l => {
     const data = getLeagueData(l.id);
@@ -1314,10 +1383,12 @@ function renderExposure() {
 
   let rows = Object.keys(counts).map(id => {
     const p = PLAYERS ? PLAYERS[id] : null;
+    const posGroup = (p && (p.fantasy_positions?.[0] || p.position)) || null;
+    const denom = (posGroup && posGroupTeamCount[posGroup] > 0) ? posGroupTeamCount[posGroup] : totalTeams;
     return {
       id, name: playerName(p, id), badge: badgeInfo(p),
       count: counts[id].count, leagueNames: counts[id].leagueNames,
-      pct: (counts[id].count / totalTeams) * 100
+      denom, pct: (counts[id].count / denom) * 100
     };
   });
   rows.sort((a, b) => b.pct - a.pct || a.name.localeCompare(b.name));
@@ -1327,7 +1398,7 @@ function renderExposure() {
 
   wrap.appendChild(el(`
     <div class="row" style="margin-top:16px; justify-content:space-between;">
-      <span class="muted" style="font-size:12px;">Share of your ${totalTeams} team${totalTeams===1?"":"s"} rostering each player</span>
+      <span class="muted" style="font-size:12px;">Share of your teams rostering each player - IDP % only counts leagues with IDP slots</span>
     </div>
     <input type="text" placeholder="Filter by player name..." style="width:100%; margin:10px 0 14px;"
       oninput="setExposureFilter(this.value)" value="${escapeHtml(STATE.exposureFilter)}" />
@@ -1350,7 +1421,7 @@ function renderExposure() {
               ${escapeHtml(r.name)} <span class="pbadge" style="background:${r.badge.color}">${r.badge.label}</span>
               <div class="muted" style="font-size:10px; margin-top:2px;">${r.leagueNames.map(n => escapeHtml(n)).join(", ")}</div>
             </td>
-            <td class="num mono">${r.count}/${totalTeams}</td>
+            <td class="num mono">${r.count}/${r.denom}</td>
             <td class="num mono">${r.pct.toFixed(0)}%</td>
           </tr>`).join("")}
       </tbody>
