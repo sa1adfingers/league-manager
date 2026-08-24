@@ -175,6 +175,19 @@ function getCloudConfig() { return DB.get("cloud", null); }
 function saveCloudConfig(cfg) { DB.set("cloud", cfg); }
 function clearCloudConfig() { DB.remove("cloud"); }
 
+/* Profile: which person is using this device. Local only, never synced -
+   it's what keys each person's "my team" pick so two people sharing the
+   same cloud sync don't overwrite each other's team selection. */
+function getProfile() { return DB.get("profile", null); }
+function setProfile(name) { DB.set("profile", name); }
+function myTeamFor(league) {
+  const profile = getProfile();
+  if (!profile) return null;
+  if (league.teams && league.teams[profile]) return league.teams[profile];
+  if (league.myRosterId && !league.teams) return league.myRosterId; // legacy single-owner data
+  return null;
+}
+
 /* =========================================================
    CLOUD SYNC (Supabase) - syncs only the saved-league list
    (id + nickname) across devices. Roster/standings/player data
@@ -200,13 +213,13 @@ async function cloudFetch(path, options) {
 }
 async function cloudPullLeagues() {
   const rows = await cloudFetch("leagues?select=*");
-  return (rows || []).map(r => ({ id: r.id, nickname: r.nickname, addedAt: r.added_at, myRosterId: r.my_roster_id || null }));
+  return (rows || []).map(r => ({ id: r.id, nickname: r.nickname, addedAt: r.added_at, teams: r.teams || {} }));
 }
 async function cloudUpsertLeague(l) {
   await cloudFetch("leagues?on_conflict=id", {
     method: "POST",
     headers: { Prefer: "resolution=merge-duplicates" },
-    body: JSON.stringify([{ id: l.id, nickname: l.nickname, added_at: l.addedAt || Date.now(), my_roster_id: l.myRosterId || null }])
+    body: JSON.stringify([{ id: l.id, nickname: l.nickname, added_at: l.addedAt || Date.now(), teams: l.teams || {} }])
   });
 }
 async function cloudDeleteLeague(id) {
@@ -476,8 +489,13 @@ async function mergeWithCloud() {
   const merged = local.slice();
   cloudLeagues.forEach(cl => {
     const idx = merged.findIndex(l => l.id === cl.id);
-    if (idx === -1) merged.push(cl);
-    else merged[idx] = cl; // cloud wins on nickname/myRosterId conflicts
+    if (idx === -1) {
+      merged.push(cl);
+    } else {
+      const localTeams = merged[idx].teams || {};
+      const cloudTeams = cl.teams || {};
+      merged[idx] = Object.assign({}, cl, { teams: Object.assign({}, localTeams, cloudTeams) });
+    }
   });
   saveLeagues(merged);
   // anything local that the cloud doesn't know about yet gets pushed up,
@@ -533,12 +551,29 @@ window.onCompareChange = function (side, field, value) {
   render();
 };
 
-/* -------- my team designation -------- */
+/* -------- my team designation (per profile) -------- */
+window.changeProfile = function () {
+  const current = getProfile() || "";
+  const name = prompt("Which profile is this device? (e.g. your name)", current);
+  if (name === null) return;
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  setProfile(trimmed);
+  render();
+};
+
 window.setMyTeam = async function (leagueId, rosterId) {
+  let profile = getProfile();
+  if (!profile) {
+    window.changeProfile();
+    profile = getProfile();
+    if (!profile) return; // they cancelled - nothing to attribute the pick to
+  }
   const leagues = getLeagues();
   const l = leagues.find(x => x.id === leagueId);
   if (!l) return;
-  l.myRosterId = rosterId || null;
+  if (!l.teams) l.teams = {};
+  if (rosterId) l.teams[profile] = rosterId; else delete l.teams[profile];
   saveLeagues(leagues);
   if (getCloudConfig()) {
     try { await cloudUpsertLeague(l); } catch (e) { console.error("Cloud push failed", e); }
@@ -639,6 +674,7 @@ function render() {
 
 function renderHeader() {
   const leagues = getLeagues();
+  const profile = getProfile();
   return el(`
     <div>
       <div class="topbar">
@@ -647,6 +683,7 @@ function renderHeader() {
           <h1 class="brand-title">League Manager</h1>
         </div>
         <div class="row">
+          <button class="btn btn-sm" onclick="changeProfile()">${profile ? "Viewing as " + escapeHtml(profile) : "Set your name"}</button>
           ${leagues.length > 0 ? `<button class="btn btn-sm" onclick="syncAll()" ${STATE.loading?"disabled":""}>${STATE.loading ? '<span class="spinner"></span>' : ''} Sync all</button>` : ""}
         </div>
       </div>
@@ -700,11 +737,14 @@ function renderDashboard() {
     const data = getLeagueData(l.id);
     const standings = data ? computeStandings(data.rosters, data.users) : [];
     const top = standings[0];
+    const myIdx = myTeamFor(l) ? standings.findIndex(s => String(s.rosterId) === String(myTeamFor(l))) : -1;
+    const mine = myIdx >= 0 ? standings[myIdx] : null;
     grid.appendChild(el(`
       <div class="league-card" onclick="openLeague('${l.id}')">
         <div class="league-card-title">${escapeHtml(l.nickname)}</div>
         <div class="league-card-sub">${data ? escapeHtml(data.league.season) + " | " + data.rosters.length + " teams" : "Not synced yet"}</div>
         ${top ? `<div class="league-card-row"><span>Leader</span><span>${escapeHtml(top.name)} (${top.wins}-${top.losses}${top.ties?`-${top.ties}`:""})</span></div>` : ""}
+        ${mine ? `<div class="league-card-row"><span>My Team</span><span>${escapeHtml(mine.name)} (${mine.wins}-${mine.losses}${mine.ties?`-${mine.ties}`:""}) - #${myIdx+1}</span></div>` : ""}
         <div class="league-card-row"><span>Last synced</span><span class="mono">${fmtTime(data?.syncedAt)}</span></div>
         <div class="league-card-actions" onclick="event.stopPropagation()">
           <button class="btn btn-sm" onclick="syncOne('${l.id}')">Sync</button>
@@ -790,7 +830,7 @@ function renderLeagueDetail() {
       <div class="row">
         <select onchange="setMyTeam('${STATE.leagueId}', this.value)" style="font-size:12px;">
           <option value="">My team...</option>
-          ${data.rosters.map(r => `<option value="${r.roster_id}" ${String(meta?.myRosterId)===String(r.roster_id)?"selected":""}>${escapeHtml(teamLabel(r, data.users))}</option>`).join("")}
+          ${data.rosters.map(r => `<option value="${r.roster_id}" ${String(myTeamFor(meta||{}))===String(r.roster_id)?"selected":""}>${escapeHtml(teamLabel(r, data.users))}</option>`).join("")}
         </select>
         <button class="btn btn-sm" onclick="syncOne('${STATE.leagueId}')" ${STATE.loading?"disabled":""}>
           ${STATE.loading ? '<span class="spinner"></span>' : ''} Sync
@@ -1129,8 +1169,8 @@ function transactionCardHtml(t) {
 function renderNeeds() {
   const wrap = document.createElement("div");
   const allLeagues = getLeagues();
-  const withTeam = allLeagues.filter(l => l.myRosterId && getLeagueData(l.id));
-  const withoutTeam = allLeagues.filter(l => !l.myRosterId && getLeagueData(l.id));
+  const withTeam = allLeagues.filter(l => myTeamFor(l) && getLeagueData(l.id));
+  const withoutTeam = allLeagues.filter(l => !myTeamFor(l) && getLeagueData(l.id));
 
   if (withoutTeam.length > 0) {
     wrap.appendChild(el(`
@@ -1149,7 +1189,7 @@ function renderNeeds() {
   grid.className = "roster-grid";
   withTeam.forEach(l => {
     const data = getLeagueData(l.id);
-    const roster = data.rosters.find(r => String(r.roster_id) === String(l.myRosterId));
+    const roster = data.rosters.find(r => String(r.roster_id) === String(myTeamFor(l)));
     if (!roster) return;
     const needs = computeNeeds(data.league, roster);
     grid.appendChild(el(`
