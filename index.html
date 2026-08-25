@@ -119,6 +119,13 @@
   /* compare */
   .compare-grid { display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
   @media (max-width:680px) { .compare-grid { grid-template-columns: 1fr; } }
+  .mu-bench-grid { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+  .mu-slot-row { display:grid; grid-template-columns: 1fr 34px 1fr; gap:8px; align-items:start; padding:8px 0; border-top:1px solid var(--line); }
+  @media (max-width:480px) {
+    .mu-slot-row { grid-template-columns: 1fr 24px 1fr; gap:4px; padding:6px 0; }
+    .mu-slot-row .pbadge { font-size:8.5px; padding:1px 4px; }
+    .mu-bench-grid { gap:6px; }
+  }
   .compare-picker { display:flex; flex-direction:column; gap:6px; margin-bottom:10px; }
 
   .spin { display:inline-block; animation: spin 0.9s linear infinite; }
@@ -291,7 +298,7 @@ async function ensurePlayers(force) {
     trimmed[id] = {
       first_name: p.first_name, last_name: p.last_name,
       position: p.position, fantasy_positions: p.fantasy_positions,
-      team: p.team, status: p.status
+      team: p.team, status: p.status, injury_status: p.injury_status
     };
   }
   const payload = { updatedAt: Date.now(), map: trimmed };
@@ -386,6 +393,7 @@ let STATE = {
   matchupDetailWeek: null,
   matchupDetailPair: null,
   matchupPlayerPoints: {},
+  nflSchedule: null,
   trending: null,
   trendingType: "add",
   transactions: null,
@@ -777,6 +785,16 @@ window.viewMatchupDetail = async function (leagueId, week, matchupId) {
     const pair = matchups.filter(m => m.matchup_id === matchupId);
     STATE.matchupDetailPair = pair;
 
+    if (!STATE.nflSchedule) {
+      try {
+        const res = await fetch(`https://api.sleeper.app/schedule/nfl/regular/2025`);
+        STATE.nflSchedule = res.ok ? await res.json() : [];
+      } catch (e) {
+        STATE.nflSchedule = [];
+      }
+    }
+
+    // Fetch actual/projected points for starters only (bench/IR just show info, no points fetch)
     const ids = new Set();
     pair.forEach(side => (side.starters || []).forEach(id => { if (id && id !== "0") ids.add(id); }));
     STATE.matchupPlayerPoints = STATE.matchupPlayerPoints || {};
@@ -1775,6 +1793,40 @@ function matchupCardHtml(a, rosterA, b, rosterB, users, isMine, leagueId, week) 
 /* =========================================================
    RENDER: MATCHUP DETAIL (boxscore, beta actual/projected)
 ========================================================= */
+function nflGameInfo(team, week) {
+  if (!team || !STATE.nflSchedule) return null;
+  const game = STATE.nflSchedule.find(g => g.week === week && (g.home === team || g.away === team));
+  if (!game) return null;
+  const opp = game.home === team ? game.away : game.home;
+  const atOrVs = game.home === team ? "vs" : "@";
+  let dateText = "";
+  if (game.date) {
+    const d = new Date(game.date);
+    if (!isNaN(d.getTime())) {
+      dateText = d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+      // only append a clock time if the date string actually carried one (not just midnight from a date-only string)
+      if (game.date.includes("T") || game.date.includes(":")) {
+        dateText += " " + d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      }
+    }
+  }
+  return `${atOrVs} ${opp}${dateText ? " - " + dateText : ""}`;
+}
+
+function playerStatusBadge(p) {
+  const status = p && p.injury_status;
+  if (!status) return "";
+  const color = status === "Out" || status === "IR" ? "var(--loss)" : "var(--gold)";
+  return `<span class="pbadge" style="background:${color};">${escapeHtml(status)}</span>`;
+}
+
+function matchupPlayerMeta(pid, week) {
+  const pl = PLAYERS ? PLAYERS[pid] : null;
+  const badge = badgeInfo(pl);
+  const game = nflGameInfo(pl?.team, week);
+  return { pl, badge, game };
+}
+
 function renderMatchupDetail() {
   const wrap = document.createElement("div");
   const leagueId = STATE.matchupDetailLeagueId;
@@ -1788,7 +1840,7 @@ function renderMatchupDetail() {
       <span style="font-weight:700;">${escapeHtml(league?.nickname || "")} - Week ${week}</span>
       <button class="btn btn-sm" onclick="navigate('matchups')">Back to Matchups</button>
     </div>
-    <div class="muted" style="font-size:10.5px; margin-top:4px;">Per-player actual/projected points use an unofficial Sleeper endpoint - beta, may show "-" if unavailable</div>
+    <div class="muted" style="font-size:10.5px; margin-top:4px;">Points, game info, and status use unofficial Sleeper endpoints - beta, may show "-" or be missing if unavailable</div>
   `));
 
   if (pair.length === 0 || !data) {
@@ -1796,42 +1848,102 @@ function renderMatchupDetail() {
     return wrap;
   }
 
+  const [sideA, sideB] = pair;
+  const rosterA = data.rosters.find(r => r.roster_id === sideA.roster_id);
+  const rosterB = sideB ? data.rosters.find(r => r.roster_id === sideB.roster_id) : null;
   const scoring = data.league.scoring_settings;
-  const grid = document.createElement("div");
-  grid.className = "compare-grid";
-  pair.forEach(side => {
-    const roster = data.rosters.find(r => r.roster_id === side.roster_id);
-    const rows = (side.starters || []).map(pid => {
-      if (!pid || pid === "0") return `<div class="prow empty"><span class="pname muted">Empty</span></div>`;
-      const pl = PLAYERS ? PLAYERS[pid] : null;
-      const badge = badgeInfo(pl);
-      const key = `${pid}-${week}`;
-      const entry = STATE.matchupPlayerPoints ? STATE.matchupPlayerPoints[key] : undefined;
-      let actualText = "-", projText = "-";
-      if (entry) {
-        const actualPts = computeLeaguePoints(entry.stat, scoring);
-        const projPts = computeLeaguePoints(entry.proj, scoring);
-        if (actualPts !== null) actualText = actualPts.toFixed(1);
-        if (projPts !== null) projText = projPts.toFixed(1);
-      } else if (entry === null) {
-        actualText = "N/A"; projText = "N/A";
-      }
-      return `<div class="prow" style="justify-content:space-between; flex-wrap:wrap;">
-        <span class="pname">${escapeHtml(playerName(pl, pid))} <span class="pbadge" style="background:${badge.color}">${badge.label}</span></span>
-        <span class="mono" style="font-size:11px;">${actualText} <span class="muted">(proj ${projText})</span></span>
-      </div>`;
-    }).join("");
-    grid.appendChild(el(`
-      <div class="rcard">
-        <div class="rcard-head">
-          <span class="rcard-title">${escapeHtml(roster ? teamLabel(roster, data.users) : "Roster " + side.roster_id)}</span>
-          <span class="rcard-count mono" style="font-weight:800; font-size:14px;">${(side.points || 0).toFixed(2)}</span>
-        </div>
-        ${rows}
+  const slots = starterSlots(data.league);
+
+  wrap.appendChild(el(`
+    <div class="panel" style="padding:14px; margin-top:14px;">
+      <div style="display:grid; grid-template-columns: 1fr auto auto 1fr; gap:8px; align-items:center; margin-bottom:8px;">
+        <span style="font-weight:700; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(rosterA ? teamLabel(rosterA, data.users) : "Roster " + sideA.roster_id)}</span>
+        <span class="mono" style="font-weight:800; font-size:16px;">${(sideA.points||0).toFixed(2)}</span>
+        <span class="mono" style="font-weight:800; font-size:16px;">${sideB ? (sideB.points||0).toFixed(2) : "-"}</span>
+        <span style="font-weight:700; font-size:13px; text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${sideB ? escapeHtml(rosterB ? teamLabel(rosterB, data.users) : "Roster " + sideB.roster_id) : "Bye"}</span>
       </div>
-    `));
-  });
-  wrap.appendChild(grid);
+      ${(sideA.starters || []).map((pidA, idx) => {
+        const pidB = sideB ? (sideB.starters || [])[idx] : null;
+        const slotLabel = slots[idx] ? formatSlotLabel(slots[idx]) : "";
+
+        const cellA = (() => {
+          if (!pidA || pidA === "0") return `<div style="text-align:right;"><span class="muted">Empty</span></div>`;
+          const { pl, badge, game } = matchupPlayerMeta(pidA, week);
+          const key = `${pidA}-${week}`;
+          const entry = STATE.matchupPlayerPoints ? STATE.matchupPlayerPoints[key] : undefined;
+          let actualText = "-", projText = "-";
+          if (entry) {
+            const ap = computeLeaguePoints(entry.stat, scoring), pp = computeLeaguePoints(entry.proj, scoring);
+            if (ap !== null) actualText = ap.toFixed(1);
+            if (pp !== null) projText = pp.toFixed(1);
+          } else if (entry === null) { actualText = "N/A"; projText = "N/A"; }
+          return `<div style="text-align:right; min-width:0;">
+            <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(playerName(pl, pidA))} <span class="pbadge" style="background:${badge.color}">${badge.label}</span> ${playerStatusBadge(pl)}</div>
+            <div class="muted" style="font-size:9.5px;">${pl?.team ? escapeHtml(pl.team) : ""} ${game ? escapeHtml(game) : ""}</div>
+            <div class="mono" style="font-weight:800; font-size:13px; margin-top:2px;">${actualText}</div>
+            <div class="muted mono" style="font-size:9.5px;">proj ${projText}</div>
+          </div>`;
+        })();
+
+        const cellB = (() => {
+          if (!sideB) return "";
+          if (!pidB || pidB === "0") return `<div style="text-align:left;"><span class="muted">Empty</span></div>`;
+          const { pl, badge, game } = matchupPlayerMeta(pidB, week);
+          const key = `${pidB}-${week}`;
+          const entry = STATE.matchupPlayerPoints ? STATE.matchupPlayerPoints[key] : undefined;
+          let actualText = "-", projText = "-";
+          if (entry) {
+            const ap = computeLeaguePoints(entry.stat, scoring), pp = computeLeaguePoints(entry.proj, scoring);
+            if (ap !== null) actualText = ap.toFixed(1);
+            if (pp !== null) projText = pp.toFixed(1);
+          } else if (entry === null) { actualText = "N/A"; projText = "N/A"; }
+          return `<div style="text-align:left; min-width:0;">
+            <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${playerStatusBadge(pl)} <span class="pbadge" style="background:${badge.color}">${badge.label}</span> ${escapeHtml(playerName(pl, pidB))}</div>
+            <div class="muted" style="font-size:9.5px;">${game ? escapeHtml(game) : ""} ${pl?.team ? escapeHtml(pl.team) : ""}</div>
+            <div class="mono" style="font-weight:800; font-size:13px; margin-top:2px;">${actualText}</div>
+            <div class="muted mono" style="font-size:9.5px;">proj ${projText}</div>
+          </div>`;
+        })();
+
+        return `
+          <div class="mu-slot-row">
+            ${cellA}
+            <div class="muted" style="text-align:center; font-size:9px; font-weight:700; padding-top:4px;">${slotLabel}</div>
+            ${cellB}
+          </div>`;
+      }).join("")}
+    </div>
+  `));
+
+  // Bench / IR - informational only, no points fetched
+  const benchIrSection = (side, roster, align) => {
+    if (!side) return "";
+    const starters = side.starters || [];
+    const all = side.players || [];
+    const reserve = (roster && roster.reserve) || [];
+    const bench = all.filter(id => !starters.includes(id) && !reserve.includes(id));
+    const row = (id) => {
+      const { pl, badge, game } = matchupPlayerMeta(id, week);
+      return `<div class="prow" style="justify-content:${align==='right'?'flex-end':'flex-start'};">
+        <span class="pname" style="${align==='right'?'text-align:right;':''}">${escapeHtml(playerName(pl, id))} <span class="pbadge" style="background:${badge.color}">${badge.label}</span> ${playerStatusBadge(pl)}</span>
+        <span class="muted" style="font-size:10px;">${pl?.team||""} ${game||""}</span>
+      </div>`;
+    };
+    return `
+      <div class="rcard-section">
+        <div class="rcard-section-label">Bench</div>
+        ${bench.map(row).join("") || '<div class="muted" style="font-size:11px;">None</div>'}
+      </div>
+      ${reserve.length ? `<div class="rcard-section"><div class="rcard-section-label">IR</div>${reserve.map(row).join("")}</div>` : ""}
+    `;
+  };
+
+  const benchGrid = document.createElement("div");
+  benchGrid.className = "mu-bench-grid";
+  benchGrid.style.marginTop = "14px";
+  benchGrid.appendChild(el(`<div class="rcard">${benchIrSection(sideA, rosterA, "left")}</div>`));
+  if (sideB) benchGrid.appendChild(el(`<div class="rcard">${benchIrSection(sideB, rosterB, "left")}</div>`));
+  wrap.appendChild(benchGrid);
 
   return wrap;
 }
