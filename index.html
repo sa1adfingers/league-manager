@@ -125,10 +125,12 @@
   .mu-score { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-weight:800; font-size:13px; }
   .mu-score-sub { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size:10px; color:var(--text-faint); }
   .mu-slot-label { text-align:center; font-weight:800; font-size:14px; color:var(--gold); letter-spacing:0.03em; }
+  .mu-statline { font-size:9.5px; color:var(--text-faint); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   @media (max-width:480px) {
     .mu-slot-row { grid-template-columns: 1fr 32px 40px 32px 1fr; column-gap:4px; padding:7px 0; }
     .mu-name, .mu-score { font-size:11.5px; }
     .mu-meta, .mu-score-sub { font-size:9px; }
+    .mu-statline { font-size:8.5px; }
     .mu-slot-label { font-size:12px; }
   }
   .compare-picker { display:flex; flex-direction:column; gap:6px; margin-bottom:10px; }
@@ -1825,43 +1827,81 @@ function playerStatusBadge(p) {
   return `<span class="pbadge" style="background:${color};">${escapeHtml(status)}</span>`;
 }
 
+const STAT_LABELS = {
+  pass_cmp: "CMP", pass_att: "ATT", pass_yd: "PASS YD", pass_td: "PASS TD", pass_int: "INT",
+  rush_att: "CAR", rush_yd: "RUSH YD", rush_td: "RUSH TD",
+  rec: "REC", rec_tgt: "TGT", rec_yd: "REC YD", rec_td: "REC TD",
+  fum_lost: "FUM LOST",
+  idp_tkl_solo: "TKL", idp_tkl_ast: "AST", idp_tkl: "TKL", idp_sack: "SACK",
+  idp_int: "INT", idp_pd: "PD", idp_ff: "FF", idp_fum_rec: "FR", idp_safety: "SAFETY", idp_blk_kick: "BLK",
+  fgm: "FG", fga: "FGA", xpm: "XP", xpa: "XPA",
+  def_td: "DEF TD", def_int: "INT", def_sack: "SACK", def_safety: "SAFETY", st_td: "ST TD",
+};
+const STAT_LABEL_ORDER = [
+  "pass_cmp","pass_att","pass_yd","pass_td","pass_int",
+  "rush_att","rush_yd","rush_td",
+  "rec","rec_tgt","rec_yd","rec_td",
+  "fum_lost",
+  "idp_tkl_solo","idp_tkl_ast","idp_tkl","idp_sack","idp_int","idp_pd","idp_ff","idp_fum_rec","idp_safety","idp_blk_kick",
+  "fgm","fga","xpm","xpa",
+  "def_td","def_int","def_sack","def_safety","st_td",
+];
+function formatStatLine(statsObj) {
+  if (!statsObj) return "";
+  const stats = statsObj.stats || statsObj;
+  if (!stats || typeof stats !== "object") return "";
+  const parts = [];
+  STAT_LABEL_ORDER.forEach(key => {
+    if (typeof stats[key] === "number" && stats[key] !== 0) {
+      parts.push(`${stats[key]} ${STAT_LABELS[key]}`);
+    }
+  });
+  return parts.join(" \u00b7 ");
+}
+
 function matchupPlayerMeta(pid, week) {
   const pl = PLAYERS ? PLAYERS[pid] : null;
   const badge = badgeInfo(pl);
   const game = nflGameInfo(pl?.team, week);
   const key = `${pid}-${week}`;
   const entry = STATE.matchupPlayerPoints ? STATE.matchupPlayerPoints[key] : undefined;
-  let actual = "-", proj = "-";
+  let actual = "-", proj = "-", statLine = "";
   if (entry) {
     const ap = STATE.matchupDetailScoring ? computeLeaguePoints(entry.stat, STATE.matchupDetailScoring) : null;
     const pp = STATE.matchupDetailScoring ? computeLeaguePoints(entry.proj, STATE.matchupDetailScoring) : null;
     if (ap !== null) actual = ap.toFixed(1);
     if (pp !== null) proj = pp.toFixed(1);
+    statLine = formatStatLine(entry.stat);
   }
-  return { pl, badge, game, actual, proj, statusHtml: playerStatusBadge(pl) };
+  return { pl, badge, game, actual, proj, statusHtml: playerStatusBadge(pl), statLine };
 }
 
 function matchupSlotRowHtml(pidA, pidB, slotLabel, week, showPosBadge) {
   const cell = (pid) => {
-    if (!pid || pid === "0") return { name: "Empty", meta: "", actual: "", proj: "", statusHtml: "", badgeHtml: "" };
+    if (!pid || pid === "0") return { name: "Empty", team: "", meta: "", actual: "", proj: "", statusHtml: "", badgeHtml: "", statLine: "" };
     const m = matchupPlayerMeta(pid, week);
     const badgeHtml = showPosBadge ? `<span class="pbadge" style="background:${m.badge.color};">${m.badge.label}</span>` : "";
-    return { name: playerName(m.pl, pid), meta: m.game, actual: m.actual, proj: m.proj, statusHtml: m.statusHtml, badgeHtml };
+    return { name: playerName(m.pl, pid), team: (m.pl && m.pl.team) || "", meta: m.game, actual: m.actual, proj: m.proj, statusHtml: m.statusHtml, badgeHtml, statLine: m.statLine };
   };
   const A = cell(pidA);
-  const B = pidB !== undefined ? cell(pidB) : { name: "", meta: "", actual: "", proj: "", statusHtml: "", badgeHtml: "" };
+  const B = pidB !== undefined ? cell(pidB) : { name: "", team: "", meta: "", actual: "", proj: "", statusHtml: "", badgeHtml: "", statLine: "" };
+
+  const statRow = (A.statLine || B.statLine) ? `
+      <div class="mu-statline" style="grid-column:1 / 3; grid-row:3; text-align:left;">${escapeHtml(A.statLine)}</div>
+      <div class="mu-statline" style="grid-column:4 / 6; grid-row:3; text-align:right;">${escapeHtml(B.statLine)}</div>` : "";
 
   return `
     <div class="mu-slot-row">
-      <div class="mu-name" style="grid-column:1; grid-row:1; text-align:left;">${escapeHtml(A.name)} ${A.badgeHtml} ${A.statusHtml}</div>
+      <div class="mu-name" style="grid-column:1; grid-row:1; text-align:left;">${escapeHtml(A.name)} ${A.team ? `<span class="muted">(${escapeHtml(A.team)})</span>` : ""} ${A.badgeHtml} ${A.statusHtml}</div>
       <div class="mu-score" style="grid-column:2; grid-row:1; text-align:right;">${A.actual}</div>
       <div class="mu-slot-label" style="grid-column:3; grid-row:1 / 3;">${slotLabel}</div>
       <div class="mu-score" style="grid-column:4; grid-row:1; text-align:left;">${B.actual}</div>
-      <div class="mu-name" style="grid-column:5; grid-row:1; text-align:right;">${B.statusHtml} ${B.badgeHtml} ${escapeHtml(B.name)}</div>
+      <div class="mu-name" style="grid-column:5; grid-row:1; text-align:right;">${B.statusHtml} ${B.badgeHtml} ${B.team ? `<span class="muted">(${escapeHtml(B.team)})</span>` : ""} ${escapeHtml(B.name)}</div>
       <div class="mu-meta" style="grid-column:1; grid-row:2; text-align:left;">${escapeHtml(A.meta)}</div>
       <div class="mu-score-sub" style="grid-column:2; grid-row:2; text-align:right;">${A.proj}</div>
       <div class="mu-score-sub" style="grid-column:4; grid-row:2; text-align:left;">${B.proj}</div>
       <div class="mu-meta" style="grid-column:5; grid-row:2; text-align:right;">${escapeHtml(B.meta)}</div>
+      ${statRow}
     </div>`;
 }
 
@@ -1899,10 +1939,10 @@ function renderMatchupDetail() {
 
   let html = `
     <div style="display:grid; grid-template-columns: 1fr auto auto 1fr; gap:8px; align-items:center; margin-bottom:6px;">
-      <span style="font-weight:700; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(rosterA ? teamLabel(rosterA, data.users) : "Roster " + sideA.roster_id)}</span>
+      <span style="font-weight:800; font-size:16px; color:var(--gold); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(rosterA ? teamLabel(rosterA, data.users) : "Roster " + sideA.roster_id)}</span>
       <span class="mono" style="font-weight:800; font-size:16px;">${(sideA.points||0).toFixed(2)}</span>
       <span class="mono" style="font-weight:800; font-size:16px;">${sideB ? (sideB.points||0).toFixed(2) : "-"}</span>
-      <span style="font-weight:700; font-size:13px; text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${sideB ? escapeHtml(rosterB ? teamLabel(rosterB, data.users) : "Roster " + sideB.roster_id) : "Bye"}</span>
+      <span style="font-weight:800; font-size:16px; color:var(--gold); text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${sideB ? escapeHtml(rosterB ? teamLabel(rosterB, data.users) : "Roster " + sideB.roster_id) : "Bye"}</span>
     </div>`;
 
   (sideA.starters || []).forEach((pidA, idx) => {
