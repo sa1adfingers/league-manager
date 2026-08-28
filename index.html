@@ -403,6 +403,8 @@ let STATE = {
   matchupPlayerPoints: {},
   nflSchedule: null,
   matchupDetailScoring: null,
+  waiverTargetsLeagueId: null,
+  waiverTargetsData: null,
   dashboardWeek: null,
   trending: null,
   trendingType: "add",
@@ -982,6 +984,7 @@ function render() {
   else if (STATE.route === "draftboard") body = renderDraftBoard();
   else if (STATE.route === "rankings") body = renderRankings();
   else if (STATE.route === "exposure") body = renderExposure();
+  else if (STATE.route === "waivertargets") body = renderWaiverTargets();
   else body = renderDashboard();
 
   app.appendChild(body);
@@ -1011,6 +1014,7 @@ function renderHeader() {
         <button class="nav-btn ${STATE.route==='rankings'?'active':''}" onclick="navigate('rankings')">Rankings</button>
         <button class="nav-btn ${STATE.route==='trending'?'active':''}" onclick="goTrending()">Trending</button>
         <button class="nav-btn ${STATE.route==='exposure'?'active':''}" onclick="navigate('exposure')">Exposure</button>
+        <button class="nav-btn ${STATE.route==='waivertargets'?'active':''}" onclick="navigate('waivertargets')">Waiver Targets</button>
         <button class="nav-btn ${STATE.route==='finder'?'active':''}" onclick="navigate('finder')">Player Finder</button>
         <button class="nav-btn ${STATE.route==='compare'?'active':''}" onclick="navigate('compare')">Compare Rosters</button>
       </div>
@@ -1719,6 +1723,273 @@ function renderRankings() {
   wrap.appendChild(panel);
   return wrap;
 }
+
+/* =========================================================
+   WAIVER TARGETS (beta - relies on the same unofficial stats
+   endpoints as Rankings/Finder points)
+========================================================= */
+function getWaiverTargetsList() { return DB.get("waiverTargetsList", []); } // [{playerId, leagueId}]
+function saveWaiverTargetsList(list) { DB.set("waiverTargetsList", list); }
+window.addWaiverTarget = function (playerId, leagueId) {
+  const list = getWaiverTargetsList();
+  if (!list.find(t => t.playerId === playerId && t.leagueId === leagueId)) {
+    list.push({ playerId, leagueId });
+    saveWaiverTargetsList(list);
+  }
+  render();
+};
+window.removeWaiverTarget = function (playerId, leagueId) {
+  saveWaiverTargetsList(getWaiverTargetsList().filter(t => !(t.playerId === playerId && t.leagueId === leagueId)));
+  render();
+};
+
+window.setWaiverTargetsLeague = function (id) { STATE.waiverTargetsLeagueId = id; STATE.waiverTargetsData = null; render(); };
+
+window.setWaiverTargetsMetric = function (metric) {
+  STATE.waiverTargetsMetric = metric;
+  STATE.waiverTargetsData = null; // underlying data differs per metric, force a fresh analyze
+  render();
+};
+
+function waiverMetricPoints(statsLike, weeks, metric, scoring) {
+  const pts = computeLeaguePoints(statsLike, scoring);
+  if (pts === null) return null;
+  if (metric === "recent" && weeks > 0) return pts / weeks;
+  return pts;
+}
+
+window.loadWaiverTargets = async function () {
+  const leagueId = STATE.waiverTargetsLeagueId;
+  const metric = STATE.waiverTargetsMetric || "season";
+  if (!leagueId) return;
+  await withLoading(async () => {
+    if (!PLAYERS) PLAYERS = await ensurePlayers(false);
+    const leagueEntry = getLeagues().find(l => l.id === leagueId);
+    const data = getLeagueData(leagueId);
+    if (!data || !leagueEntry) return;
+    const myRosterId = myTeamFor(leagueEntry);
+    const myRoster = data.rosters.find(r => String(r.roster_id) === String(myRosterId));
+    if (!myRoster) { STATE.waiverTargetsData = { error: "no-team" }; return; }
+
+    const positions = POS_GROUPS.filter(pg => leagueSupportsPosition(data.league, pg));
+
+    const nflState = await ensureNflState();
+    const currentWeek = (nflState.season_type === "pre" || !nflState.week) ? 1 : nflState.week;
+    let weeksToFetch = [];
+    if (metric === "recent") {
+      for (let w = Math.max(1, currentWeek - 4); w < currentWeek; w++) weeksToFetch.push(w);
+      if (weeksToFetch.length === 0) weeksToFetch = [Math.max(1, currentWeek - 1)];
+    } else if (metric === "projected") {
+      weeksToFetch = [currentWeek];
+    }
+
+    const poolByPos = {};
+    if (metric === "season") {
+      // Free agent pool per position - bulk season-total fetch, same source as Rankings
+      for (const pos of positions) {
+        try {
+          const res = await fetch(`https://api.sleeper.com/stats/nfl/2025?season_type=regular&position[]=${pos}&order_by=pts_std`);
+          poolByPos[pos] = res.ok ? await res.json() : [];
+        } catch (e) { poolByPos[pos] = []; }
+      }
+    } else {
+      // recent-form or projected: bulk weekly fetch per week, summed/counted per player
+      const endpoint = metric === "projected" ? "projections" : "stats";
+      for (const pos of positions) {
+        const merged = {};
+        for (const w of weeksToFetch) {
+          try {
+            const res = await fetch(`https://api.sleeper.com/${endpoint}/nfl/2025/${w}?season_type=regular&position[]=${pos}`);
+            const rows = res.ok ? await res.json() : [];
+            rows.forEach(row => {
+              const pid = row.player_id || row.playerId;
+              if (!pid) return;
+              const s = row.stats || row;
+              if (!merged[pid]) merged[pid] = { player_id: pid, team: row.team, stats: {}, weeks: 0 };
+              merged[pid].weeks += 1;
+              for (const k in s) { if (typeof s[k] === "number") merged[pid].stats[k] = (merged[pid].stats[k] || 0) + s[k]; }
+            });
+          } catch (e) { /* skip that week */ }
+        }
+        poolByPos[pos] = Object.values(merged);
+      }
+    }
+
+    // My players' points using the same metric
+    STATE.playerSeasonStats = STATE.playerSeasonStats || {};
+    const myMetricCache = {};
+    if (metric === "season") {
+      for (const id of (myRoster.players || [])) {
+        if (STATE.playerSeasonStats[id] === undefined) {
+          try { STATE.playerSeasonStats[id] = await fetchPlayerSeasonStats(id, "2025"); }
+          catch (e) { STATE.playerSeasonStats[id] = null; }
+        }
+      }
+    } else {
+      const endpoint = metric === "projected" ? "projections" : "stats";
+      for (const id of (myRoster.players || [])) {
+        const sum = {}; let weeks = 0;
+        for (const w of weeksToFetch) {
+          try {
+            const res = await fetch(`https://api.sleeper.com/${endpoint}/nfl/player/${id}?season_type=regular&season=2025&week=${w}`);
+            if (res.ok) {
+              const json = await res.json();
+              const s = json && (json.stats || json);
+              if (s && Object.keys(s).length) {
+                weeks += 1;
+                for (const k in s) { if (typeof s[k] === "number") sum[k] = (sum[k] || 0) + s[k]; }
+              }
+            }
+          } catch (e) { /* skip */ }
+        }
+        myMetricCache[id] = { stats: sum, weeks };
+      }
+    }
+
+    STATE.waiverTargetsData = { leagueId, positions, poolByPos, myRosterId, metric, weeksToFetch, currentWeek, myMetricCache };
+  });
+};
+
+function renderWaiverTargets() {
+  const wrap = document.createElement("div");
+  const leagues = getLeagues().filter(l => l.source !== "manual" && myTeamFor(l) && getLeagueData(l.id));
+
+  if (leagues.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Set "My team" on a league first - waiver targets need to know which roster is yours.</p></div>`));
+    return wrap;
+  }
+  if (!STATE.waiverTargetsLeagueId || !leagues.find(l => l.id === STATE.waiverTargetsLeagueId)) {
+    STATE.waiverTargetsLeagueId = leagues[0].id;
+  }
+
+  wrap.appendChild(el(`
+    <div class="row" style="margin-top:16px; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+      <select onchange="setWaiverTargetsLeague(this.value)">
+        ${leagues.map(l => `<option value="${l.id}" ${l.id===STATE.waiverTargetsLeagueId?"selected":""}>${escapeHtml(l.nickname)}</option>`).join("")}
+      </select>
+      <button class="btn btn-sm btn-primary" onclick="loadWaiverTargets()" ${STATE.loading?"disabled":""}>
+        ${STATE.loading ? '<span class="spinner"></span>' : ''} Analyze
+      </button>
+    </div>
+    <div class="row" style="margin-top:8px; gap:4px;">
+      <button class="btn btn-sm ${(!STATE.waiverTargetsMetric||STATE.waiverTargetsMetric==='season')?'btn-primary':''}" onclick="setWaiverTargetsMetric('season')">Season Total</button>
+      <button class="btn btn-sm ${STATE.waiverTargetsMetric==='recent'?'btn-primary':''}" onclick="setWaiverTargetsMetric('recent')">Last 4 Wks Avg</button>
+      <button class="btn btn-sm ${STATE.waiverTargetsMetric==='projected'?'btn-primary':''}" onclick="setWaiverTargetsMetric('projected')">This Wk Proj</button>
+    </div>
+    <div class="muted" style="font-size:10.5px; margin-top:6px;">Beta - uses unofficial Sleeper endpoints, may be incomplete or unavailable</div>
+  `));
+
+  const d = STATE.waiverTargetsData;
+  if (!d || d.leagueId !== STATE.waiverTargetsLeagueId) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Click "Analyze" to check needs and available waivers for this team.</p></div>`));
+    return wrap;
+  }
+  if (d.error === "no-team") {
+    wrap.appendChild(el(`<div class="empty-state"><p>No team set for this league.</p></div>`));
+    return wrap;
+  }
+
+  const data = getLeagueData(d.leagueId);
+  const leagueEntry = getLeagues().find(l => l.id === d.leagueId);
+  const myRoster = data.rosters.find(r => String(r.roster_id) === String(d.myRosterId));
+  const allRostered = new Set();
+  data.rosters.forEach(r => (r.players || []).forEach(id => allRostered.add(id)));
+
+  const targetsList = getWaiverTargetsList();
+  const metric = d.metric || "season";
+  const metricLabel = metric === "recent" ? "avg" : metric === "projected" ? "proj" : "pts";
+  const weekNote = metric === "recent" ? ` (weeks ${d.weeksToFetch[0]}-${d.weeksToFetch[d.weeksToFetch.length-1]})`
+                  : metric === "projected" ? ` (week ${d.currentWeek})` : "";
+
+  d.positions.forEach(pos => {
+    const myIds = (myRoster.players || []).filter(id => {
+      const p = PLAYERS ? PLAYERS[id] : null;
+      const fp = (p && (p.fantasy_positions?.[0] || p.position)) || null;
+      return fp === pos;
+    });
+    const myPlayers = myIds.map(id => {
+      let pts;
+      if (metric === "season") {
+        pts = computeLeaguePoints(STATE.playerSeasonStats[id], data.league.scoring_settings);
+      } else {
+        const entry = d.myMetricCache[id];
+        pts = entry ? waiverMetricPoints(entry.stats, entry.weeks, metric, data.league.scoring_settings) : null;
+      }
+      return { id, name: playerName(PLAYERS ? PLAYERS[id] : null, id), pts: pts === null ? 0 : pts, hasData: pts !== null };
+    }).sort((a, b) => b.pts - a.pts);
+
+    const requiredStarters = (data.league.roster_positions || []).filter(s => s === pos).length;
+
+    const pool = d.poolByPos[pos] || [];
+    const freeAgents = pool.map(row => {
+      const pid = row.player_id || row.playerId;
+      if (!pid || allRostered.has(pid)) return null;
+      const pl = PLAYERS ? PLAYERS[pid] : null;
+      const pts = metric === "season"
+        ? computeLeaguePoints(row, data.league.scoring_settings)
+        : waiverMetricPoints(row.stats, row.weeks, metric, data.league.scoring_settings);
+      if (pts === null) return null;
+      return { id: pid, name: playerName(pl, pid), team: pl?.team || "", pts };
+    }).filter(Boolean).sort((a, b) => b.pts - a.pts).slice(0, 8);
+
+    const bestFA = freeAgents[0];
+    const worstMine = myPlayers[myPlayers.length - 1];
+    const dropCandidate = (bestFA && worstMine && worstMine.hasData && bestFA.pts > worstMine.pts)
+      ? { mine: worstMine, replacement: bestFA } : null;
+
+    const panel = document.createElement("div");
+    panel.className = "panel";
+    panel.style.padding = "14px";
+    panel.style.marginTop = "14px";
+    panel.innerHTML = `
+      <div class="row" style="justify-content:space-between;">
+        <span style="font-weight:800; font-size:14px; color:var(--gold);">${pos}</span>
+        <span class="muted mono" style="font-size:10.5px;">${myIds.length} rostered - ${requiredStarters} starter slot${requiredStarters===1?"":"s"}</span>
+      </div>
+      ${myPlayers.length ? `
+        <div style="margin-top:8px;">
+          ${myPlayers.map(p => `<div class="prow" style="justify-content:space-between;"><span class="pname">${escapeHtml(p.name)}</span><span class="mono">${p.hasData ? p.pts.toFixed(1) : "-"}</span></div>`).join("")}
+        </div>` : `<div class="muted" style="font-size:11.5px; margin-top:8px;">None rostered.</div>`}
+      ${dropCandidate ? `
+        <div style="margin-top:10px; padding:8px; border-radius:6px; background:rgba(193,80,63,0.08); border:1px solid rgba(193,80,63,0.3);">
+          <span style="font-size:11px;">Consider dropping <strong>${escapeHtml(dropCandidate.mine.name)}</strong> (${dropCandidate.mine.pts.toFixed(1)} ${metricLabel}) - <strong>${escapeHtml(dropCandidate.replacement.name)}</strong> is available with ${dropCandidate.replacement.pts.toFixed(1)} ${metricLabel}${weekNote}.</span>
+        </div>` : ""}
+      <div class="rcard-section-label" style="margin-top:12px;">Top free agents (${metricLabel}${weekNote})</div>
+      ${freeAgents.length ? freeAgents.map(fa => {
+        const inList = targetsList.some(t => t.playerId === fa.id && t.leagueId === d.leagueId);
+        return `<div class="prow" style="justify-content:space-between;">
+          <span class="pname">${escapeHtml(fa.name)} ${fa.team ? `<span class="muted mono" style="font-size:10px;">${escapeHtml(fa.team)}</span>` : ""}</span>
+          <span class="row" style="gap:6px;">
+            <span class="mono">${fa.pts.toFixed(1)}</span>
+            <button class="btn btn-sm ${inList?'btn-danger':'btn-primary'}" style="padding:2px 8px; font-size:10.5px;" onclick="${inList ? `removeWaiverTarget('${fa.id}','${d.leagueId}')` : `addWaiverTarget('${fa.id}','${d.leagueId}')`}">${inList ? "Remove" : "+ Target"}</button>
+          </span>
+        </div>`;
+      }).join("") : `<div class="muted" style="font-size:11.5px;">No free agents found with scored stats.</div>`}
+    `;
+    wrap.appendChild(panel);
+  });
+
+  // Persistent targets list across all leagues
+  if (targetsList.length > 0) {
+    wrap.appendChild(el(`<div style="font-weight:700; margin:18px 0 8px;">Your Waiver Targets</div>`));
+    const listPanel = document.createElement("div");
+    listPanel.className = "panel";
+    listPanel.style.padding = "14px";
+    listPanel.innerHTML = targetsList.map(t => {
+      const l = getLeagues().find(x => x.id === t.leagueId);
+      const p = PLAYERS ? PLAYERS[t.playerId] : null;
+      const badge = badgeInfo(p);
+      return `<div class="prow" style="justify-content:space-between;">
+        <span class="pname">${escapeHtml(playerName(p, t.playerId))} <span class="pbadge" style="background:${badge.color}">${badge.label}</span> <span class="muted">(${escapeHtml(l ? l.nickname : "?")})</span></span>
+        <button class="btn btn-sm btn-danger" onclick="removeWaiverTarget('${t.playerId}','${t.leagueId}')">Remove</button>
+      </div>`;
+    }).join("");
+    wrap.appendChild(listPanel);
+  }
+
+  return wrap;
+}
+
 
 function finderResultsHtml() {
   const q = (STATE.finderQuery || "").trim().toLowerCase();
