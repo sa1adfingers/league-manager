@@ -152,6 +152,7 @@
 </head>
 <body>
 <div id="app"></div>
+<div id="modal-root"></div>
 
 <script>
 /* =========================================================
@@ -1802,11 +1803,12 @@ function matchupCardHtml(a, rosterA, b, rosterB, users, isMine, leagueId, week) 
    RENDER: MATCHUP DETAIL (boxscore, beta actual/projected)
 ========================================================= */
 function nflGameInfo(team, week) {
-  if (!team || !STATE.nflSchedule) return "";
+  if (!team) return "";
+  if (!STATE.nflSchedule) return `(${team})`;
   const game = STATE.nflSchedule.find(g => g.week === week && (g.home === team || g.away === team));
-  if (!game) return "";
+  if (!game) return `(${team})`;
   const opp = game.home === team ? game.away : game.home;
-  const prefix = game.home === team ? "" : "@";
+  const prefix = game.home === team ? "vs." : "@";
   let dateText = "";
   if (game.date) {
     const d = new Date(game.date);
@@ -1817,7 +1819,7 @@ function nflGameInfo(team, week) {
       }
     }
   }
-  return `${prefix}${opp}${dateText ? " " + dateText : ""}`;
+  return `(${team}) ${prefix} ${opp}${dateText ? " " + dateText : ""}`;
 }
 
 function playerStatusBadge(p) {
@@ -1859,6 +1861,61 @@ function formatStatLine(statsObj) {
   return parts.join(" \u00b7 ");
 }
 
+function statBreakdownTableHtml(statsObj, scoring) {
+  const stats = statsObj && (statsObj.stats || statsObj);
+  if (!stats || typeof stats !== "object" || !scoring) {
+    return `<div class="muted" style="font-size:12px;">No data available.</div>`;
+  }
+  const rows = [];
+  let total = 0;
+  for (const key in scoring) {
+    if (typeof stats[key] === "number" && stats[key] !== 0) {
+      const weight = scoring[key];
+      const pts = stats[key] * weight;
+      total += pts;
+      const label = STAT_LABELS[key] || key.replace(/_/g, " ").toUpperCase();
+      rows.push({ label, value: stats[key], weight, pts });
+    }
+  }
+  if (rows.length === 0) {
+    return `<div class="muted" style="font-size:12px;">No scored stats yet.</div>`;
+  }
+  return `
+    <table>
+      <thead><tr><th>Stat</th><th class="num">Value</th><th class="num">Weight</th><th class="num">Pts</th></tr></thead>
+      <tbody>
+        ${rows.map(r => `<tr><td>${escapeHtml(r.label)}</td><td class="num mono">${r.value}</td><td class="num mono">${r.weight}</td><td class="num mono">${r.pts.toFixed(2)}</td></tr>`).join("")}
+        <tr style="border-top:2px solid var(--line);"><td style="font-weight:800;">Total</td><td></td><td></td><td class="num mono" style="font-weight:800;">${total.toFixed(2)}</td></tr>
+      </tbody>
+    </table>`;
+}
+
+window.showStatBreakdown = function (playerId, week) {
+  const pl = PLAYERS ? PLAYERS[playerId] : null;
+  const key = `${playerId}-${week}`;
+  const entry = STATE.matchupPlayerPoints ? STATE.matchupPlayerPoints[key] : null;
+  const scoring = STATE.matchupDetailScoring;
+  const modalRoot = document.getElementById("modal-root");
+  if (!modalRoot) return;
+  modalRoot.innerHTML = `
+    <div style="position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:1000; display:flex; align-items:center; justify-content:center; padding:16px;" onclick="if(event.target===this) closeStatModal()">
+      <div class="panel" style="padding:16px; max-width:380px; width:100%; max-height:80vh; overflow-y:auto;">
+        <div class="row" style="justify-content:space-between; margin-bottom:10px;">
+          <span style="font-weight:800; font-size:14px;">${escapeHtml(playerName(pl, playerId))}</span>
+          <button class="btn btn-sm" onclick="closeStatModal()">Close</button>
+        </div>
+        <div style="font-size:11px; font-weight:700; color:var(--text-faint); letter-spacing:0.06em; margin-bottom:4px;">ACTUAL</div>
+        ${statBreakdownTableHtml(entry && entry.stat, scoring)}
+        <div style="font-size:11px; font-weight:700; color:var(--text-faint); letter-spacing:0.06em; margin:14px 0 4px;">PROJECTED</div>
+        ${statBreakdownTableHtml(entry && entry.proj, scoring)}
+      </div>
+    </div>`;
+};
+window.closeStatModal = function () {
+  const modalRoot = document.getElementById("modal-root");
+  if (modalRoot) modalRoot.innerHTML = "";
+};
+
 function matchupPlayerMeta(pid, week) {
   const pl = PLAYERS ? PLAYERS[pid] : null;
   const badge = badgeInfo(pl);
@@ -1876,15 +1933,16 @@ function matchupPlayerMeta(pid, week) {
   return { pl, badge, game, actual, proj, statusHtml: playerStatusBadge(pl), statLine };
 }
 
-function matchupSlotRowHtml(pidA, pidB, slotLabel, week, showPosBadge) {
+function matchupSlotRowHtml(pidA, pidB, slotLabel, week) {
   const cell = (pid) => {
-    if (!pid || pid === "0") return { name: "Empty", team: "", meta: "", actual: "", proj: "", statusHtml: "", badgeHtml: "", statLine: "" };
+    if (!pid || pid === "0") return { id: null, name: "Empty", meta: "", actual: "", proj: "", statusHtml: "", statLine: "" };
     const m = matchupPlayerMeta(pid, week);
-    const badgeHtml = showPosBadge ? `<span class="pbadge" style="background:${m.badge.color};">${m.badge.label}</span>` : "";
-    return { name: playerName(m.pl, pid), team: (m.pl && m.pl.team) || "", meta: m.game, actual: m.actual, proj: m.proj, statusHtml: m.statusHtml, badgeHtml, statLine: m.statLine };
+    return { id: pid, name: playerName(m.pl, pid), meta: m.game, actual: m.actual, proj: m.proj, statusHtml: m.statusHtml, statLine: m.statLine };
   };
   const A = cell(pidA);
-  const B = pidB !== undefined ? cell(pidB) : { name: "", team: "", meta: "", actual: "", proj: "", statusHtml: "", badgeHtml: "", statLine: "" };
+  const B = pidB !== undefined ? cell(pidB) : { id: null, name: "", meta: "", actual: "", proj: "", statusHtml: "", statLine: "" };
+  const clickA = A.id ? `onclick="showStatBreakdown('${A.id}', ${week})" style="cursor:pointer;"` : "";
+  const clickB = B.id ? `onclick="showStatBreakdown('${B.id}', ${week})" style="cursor:pointer;"` : "";
 
   const statRow = (A.statLine || B.statLine) ? `
       <div class="mu-statline" style="grid-column:1 / 3; grid-row:3; text-align:left;">${escapeHtml(A.statLine)}</div>
@@ -1892,11 +1950,11 @@ function matchupSlotRowHtml(pidA, pidB, slotLabel, week, showPosBadge) {
 
   return `
     <div class="mu-slot-row">
-      <div class="mu-name" style="grid-column:1; grid-row:1; text-align:left;">${escapeHtml(A.name)} ${A.team ? `<span class="muted">(${escapeHtml(A.team)})</span>` : ""} ${A.badgeHtml} ${A.statusHtml}</div>
-      <div class="mu-score" style="grid-column:2; grid-row:1; text-align:right;">${A.actual}</div>
+      <div class="mu-name" style="grid-column:1; grid-row:1; text-align:left;">${escapeHtml(A.name)} ${A.statusHtml}</div>
+      <div class="mu-score" ${clickA} style="grid-column:2; grid-row:1; text-align:right;">${A.actual}</div>
       <div class="mu-slot-label" style="grid-column:3; grid-row:1 / 3;">${slotLabel}</div>
-      <div class="mu-score" style="grid-column:4; grid-row:1; text-align:left;">${B.actual}</div>
-      <div class="mu-name" style="grid-column:5; grid-row:1; text-align:right;">${B.statusHtml} ${B.badgeHtml} ${B.team ? `<span class="muted">(${escapeHtml(B.team)})</span>` : ""} ${escapeHtml(B.name)}</div>
+      <div class="mu-score" ${clickB} style="grid-column:4; grid-row:1; text-align:left;">${B.actual}</div>
+      <div class="mu-name" style="grid-column:5; grid-row:1; text-align:right;">${B.statusHtml} ${escapeHtml(B.name)}</div>
       <div class="mu-meta" style="grid-column:1; grid-row:2; text-align:left;">${escapeHtml(A.meta)}</div>
       <div class="mu-score-sub" style="grid-column:2; grid-row:2; text-align:right;">${A.proj}</div>
       <div class="mu-score-sub" style="grid-column:4; grid-row:2; text-align:left;">${B.proj}</div>
@@ -1948,7 +2006,7 @@ function renderMatchupDetail() {
   (sideA.starters || []).forEach((pidA, idx) => {
     const pidB = sideB ? (sideB.starters || [])[idx] : undefined;
     const slotLabel = slots[idx] ? formatSlotLabel(slots[idx]) : "";
-    html += matchupSlotRowHtml(pidA, pidB, slotLabel, week, false);
+    html += matchupSlotRowHtml(pidA, pidB, slotLabel, week);
   });
 
   panel.innerHTML = html;
@@ -1974,7 +2032,7 @@ function renderMatchupDetail() {
     let bh = "";
     const maxLen = Math.max(benchA.length, benchB.length);
     for (let i = 0; i < maxLen; i++) {
-      bh += matchupSlotRowHtml(benchA[i], benchB[i], "BE", week, true);
+      bh += matchupSlotRowHtml(benchA[i], benchB[i], "BE", week);
     }
     benchPanel.innerHTML = bh;
     wrap.appendChild(benchPanel);
@@ -1988,7 +2046,7 @@ function renderMatchupDetail() {
     let ih = "";
     const maxLen = Math.max(irA.length, irB.length);
     for (let i = 0; i < maxLen; i++) {
-      ih += matchupSlotRowHtml(irA[i], irB[i], "IR", week, true);
+      ih += matchupSlotRowHtml(irA[i], irB[i], "IR", week);
     }
     irPanel.innerHTML = ih;
     wrap.appendChild(irPanel);
