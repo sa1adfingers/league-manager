@@ -1621,6 +1621,101 @@ window.toggleFinderPoints = async function () {
 ========================================================= */
 const RANKINGS_POSITIONS = ["QB","RB","WR","TE","K","DEF","DL","LB","DB"];
 
+/* =========================================================
+   NFLVERSE (real, reliable data - replaces the unofficial
+   Sleeper stats endpoints where a per-player join is possible)
+========================================================= */
+function parseCSV(text) {
+  const rows = [];
+  let i = 0, field = "", row = [], inQuotes = false;
+  const n = text.length;
+  while (i < n) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i += 2; continue; }
+        inQuotes = false; i++; continue;
+      }
+      field += c; i++; continue;
+    } else {
+      if (c === '"') { inQuotes = true; i++; continue; }
+      if (c === ",") { row.push(field); field = ""; i++; continue; }
+      if (c === "\r") { i++; continue; }
+      if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; i++; continue; }
+      field += c; i++; continue;
+    }
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  if (!rows.length) return [];
+  const header = rows[0];
+  return rows.slice(1).filter(r => r.length === header.length).map(r => {
+    const obj = {};
+    header.forEach((h, idx) => { obj[h] = r[idx]; });
+    return obj;
+  });
+}
+
+const NFLVERSE_TO_SLEEPER_KEY = {
+  completions: "pass_cmp", attempts: "pass_att", passing_yards: "pass_yd", passing_tds: "pass_td", passing_interceptions: "pass_int",
+  carries: "rush_att", rushing_yards: "rush_yd", rushing_tds: "rush_td",
+  receptions: "rec", targets: "rec_tgt", receiving_yards: "rec_yd", receiving_tds: "rec_td",
+  def_tackles_solo: "idp_tkl_solo", def_tackle_assists: "idp_tkl_ast", def_sacks: "idp_sack",
+  def_interceptions: "idp_int", def_fumbles_forced: "idp_ff", def_pass_defended: "idp_pd",
+  def_tds: "def_td", def_safeties: "idp_safety",
+  fg_made: "fgm", fg_att: "fga", pat_made: "xpm", pat_att: "xpa",
+};
+
+let NFLVERSE_CROSSWALK = null;
+async function ensureNflverseCrosswalk() {
+  if (NFLVERSE_CROSSWALK) return NFLVERSE_CROSSWALK;
+  const res = await fetch("https://raw.githubusercontent.com/dynastyprocess/data/master/files/db_playerids.csv");
+  if (!res.ok) throw new Error("crosswalk unavailable");
+  const rows = parseCSV(await res.text());
+  const map = {};
+  rows.forEach(r => { if (r.gsis_id && r.sleeper_id) map[r.gsis_id] = r.sleeper_id; });
+  NFLVERSE_CROSSWALK = map;
+  return map;
+}
+
+let NFLVERSE_STATS_CACHE = null; // { season, bySleeperId: { sleeperId: { weeks, ...raw nflverse columns summed } }, unavailable }
+async function ensureNflverseSeasonStats(season) {
+  if (NFLVERSE_STATS_CACHE && NFLVERSE_STATS_CACHE.season === season) return NFLVERSE_STATS_CACHE;
+  const url = `https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_${season}.csv`;
+  let res;
+  try { res = await fetch(url); } catch (e) { res = null; }
+  if (!res || !res.ok) {
+    NFLVERSE_STATS_CACHE = { season, bySleeperId: {}, unavailable: true };
+    return NFLVERSE_STATS_CACHE;
+  }
+  const rows = parseCSV(await res.text());
+  const crosswalk = await ensureNflverseCrosswalk();
+  const numericKeys = Object.keys(NFLVERSE_TO_SLEEPER_KEY);
+
+  const bySleeperId = {};
+  rows.forEach(r => {
+    const sleeperId = crosswalk[r.player_id];
+    if (!sleeperId) return;
+    if (!bySleeperId[sleeperId]) bySleeperId[sleeperId] = { weeks: 0 };
+    const bucket = bySleeperId[sleeperId];
+    bucket.weeks += 1;
+    numericKeys.forEach(k => {
+      const v = parseFloat(r[k]);
+      if (!isNaN(v) && v !== 0) bucket[k] = (bucket[k] || 0) + v;
+    });
+  });
+
+  NFLVERSE_STATS_CACHE = { season, bySleeperId, unavailable: false };
+  return NFLVERSE_STATS_CACHE;
+}
+
+function translateNflverseBucket(bucket) {
+  const out = {};
+  for (const k in NFLVERSE_TO_SLEEPER_KEY) {
+    if (bucket[k]) out[NFLVERSE_TO_SLEEPER_KEY[k]] = bucket[k];
+  }
+  return out;
+}
+
 window.setRankingsLeague = function (id) { STATE.rankingsLeagueId = id; render(); };
 window.setRankingsPosition = function (p) { STATE.rankingsPosition = p; render(); };
 
@@ -1633,27 +1728,64 @@ window.loadRankings = async function () {
     const data = getLeagueData(leagueId);
     const scoring = data ? data.league.scoring_settings : null;
     const key = `${leagueId}|${position}`;
-    let rows;
+
+    if (position === "DEF") {
+      // Team defenses have no GSIS id / individual player row - stays on the
+      // original unofficial Sleeper endpoint, same as before.
+      let rows;
+      try {
+        const res = await fetch(`https://api.sleeper.com/stats/nfl/2025?season_type=regular&position[]=DEF&order_by=pts_std`);
+        if (!res.ok) throw new Error("bad response");
+        rows = await res.json();
+      } catch (e) {
+        STATE.rankingsData[key] = null;
+        return;
+      }
+      const gpKeys = ["gp", "gms_active", "g", "games_played"];
+      const computed = (rows || []).map(row => {
+        const pid = row.player_id || row.playerId;
+        const pl = PLAYERS ? PLAYERS[pid] : null;
+        const pts = computeLeaguePoints(row, scoring);
+        const statsBlob = row.stats || row;
+        let gp = null;
+        for (const k of gpKeys) { if (typeof statsBlob[k] === "number" && statsBlob[k] > 0) { gp = statsBlob[k]; break; } }
+        return { id: pid, name: playerName(pl, pid), team: (pl && pl.team) || row.team || "", badge: badgeInfo(pl), total: pts, gp };
+      }).filter(r => r.id && r.total !== null);
+      computed.sort((a, b) => b.total - a.total);
+      STATE.rankingsData[key] = computed.slice(0, 50);
+      return;
+    }
+
+    // Every other position: real nflverse data, joined to Sleeper via the
+    // DynastyProcess ID crosswalk.
+    let nflverse;
     try {
-      const res = await fetch(`https://api.sleeper.com/stats/nfl/2025?season_type=regular&position[]=${position}&order_by=pts_std`);
-      if (!res.ok) throw new Error("bad response");
-      rows = await res.json();
+      const nflState = await ensureNflState();
+      const currentSeason = nflState.season || String(new Date().getFullYear());
+      nflverse = await ensureNflverseSeasonStats(currentSeason);
+      if (nflverse.unavailable) {
+        nflverse = await ensureNflverseSeasonStats(String(parseInt(currentSeason, 10) - 1));
+      }
     } catch (e) {
       STATE.rankingsData[key] = null;
       return;
     }
-    const gpKeys = ["gp", "gms_active", "g", "games_played"];
-    const computed = (rows || []).map(row => {
-      const pid = row.player_id || row.playerId || (row.player && row.player.player_id);
-      const pl = PLAYERS ? PLAYERS[pid] : null;
-      const pts = computeLeaguePoints(row, scoring);
-      const statsBlob = row.stats || row;
-      let gp = null;
-      for (const k of gpKeys) {
-        if (typeof statsBlob[k] === "number" && statsBlob[k] > 0) { gp = statsBlob[k]; break; }
-      }
-      return { id: pid, name: playerName(pl, pid), team: (pl && pl.team) || row.team || "", badge: badgeInfo(pl), total: pts, gp };
-    }).filter(r => r.id && r.total !== null);
+    if (nflverse.unavailable) {
+      STATE.rankingsData[key] = null;
+      return;
+    }
+    const computed = [];
+    for (const sleeperId in nflverse.bySleeperId) {
+      const pl = PLAYERS ? PLAYERS[sleeperId] : null;
+      if (!pl) continue;
+      const fp = pl.fantasy_positions?.[0] || pl.position;
+      if (fp !== position) continue;
+      const bucket = nflverse.bySleeperId[sleeperId];
+      const translated = translateNflverseBucket(bucket);
+      const pts = computeLeaguePoints(translated, scoring);
+      if (pts === null) continue;
+      computed.push({ id: sleeperId, name: playerName(pl, sleeperId), team: pl.team || "", badge: badgeInfo(pl), total: pts, gp: bucket.weeks });
+    }
     computed.sort((a, b) => b.total - a.total);
     STATE.rankingsData[key] = computed.slice(0, 50);
   });
@@ -1685,7 +1817,7 @@ function renderRankings() {
         ${STATE.loading ? '<span class="spinner"></span>' : ''} Load top 50
       </button>
     </div>
-    <div class="muted" style="font-size:10.5px; margin-top:6px;">2025 regular season - unofficial stats endpoint, beta</div>
+    <div class="muted" style="font-size:10.5px; margin-top:6px;">QB/RB/WR/TE/K/DL/LB/DB via nflverse (falls back to last season if this season has no games yet) - DEF via an unofficial Sleeper endpoint, beta</div>
   `));
 
   const key = `${STATE.rankingsLeagueId}|${STATE.rankingsPosition}`;
@@ -1846,9 +1978,22 @@ window.loadWaiverTargets = async function () {
       }
     }
 
-    STATE.waiverTargetsData = { leagueId, positions, poolByPos, myRosterId, metric, weeksToFetch, currentWeek, myMetricCache };
+    const waiverBudget = data.league.settings && data.league.settings.waiver_budget;
+    const usedBudget = (myRoster.settings && myRoster.settings.waiver_budget_used) || 0;
+    const remainingBudget = waiverBudget ? Math.max(0, waiverBudget - usedBudget) : null;
+
+    STATE.waiverTargetsData = { leagueId, positions, poolByPos, myRosterId, metric, weeksToFetch, currentWeek, myMetricCache, waiverBudget, remainingBudget };
   });
 };
+
+function suggestFaabBid(faPts, bestFAPts, isDropReplacement, remainingBudget) {
+  if (remainingBudget === null || remainingBudget <= 0 || !bestFAPts || bestFAPts <= 0) return null;
+  const valueRatio = Math.max(0, faPts / bestFAPts);
+  const needBoost = isDropReplacement ? 1.4 : 1.0;
+  let suggested = remainingBudget * 0.18 * valueRatio * needBoost;
+  suggested = Math.max(1, Math.min(remainingBudget, Math.round(suggested)));
+  return suggested;
+}
 
 function renderWaiverTargets() {
   const wrap = document.createElement("div");
@@ -1887,6 +2032,15 @@ function renderWaiverTargets() {
   if (d.error === "no-team") {
     wrap.appendChild(el(`<div class="empty-state"><p>No team set for this league.</p></div>`));
     return wrap;
+  }
+
+  if (d.remainingBudget !== null) {
+    wrap.appendChild(el(`
+      <div class="panel" style="padding:10px 14px; margin-top:14px;">
+        <span style="font-weight:700; font-size:13px;">Your remaining FAAB: $${d.remainingBudget}</span>
+        <span class="muted" style="font-size:10.5px;"> of $${d.waiverBudget} - suggested bids below are a rough estimate from your budget and how each player ranks among available options, not a prediction of what others will bid</span>
+      </div>
+    `));
   }
 
   const data = getLeagueData(d.leagueId);
@@ -1957,10 +2111,13 @@ function renderWaiverTargets() {
       <div class="rcard-section-label" style="margin-top:12px;">Top free agents (${metricLabel}${weekNote})</div>
       ${freeAgents.length ? freeAgents.map(fa => {
         const inList = targetsList.some(t => t.playerId === fa.id && t.leagueId === d.leagueId);
-        return `<div class="prow" style="justify-content:space-between;">
+        const isReplacement = dropCandidate && dropCandidate.replacement.id === fa.id;
+        const bid = suggestFaabBid(fa.pts, bestFA.pts, isReplacement, d.remainingBudget);
+        return `<div class="prow" style="justify-content:space-between; flex-wrap:wrap;">
           <span class="pname">${escapeHtml(fa.name)} ${fa.team ? `<span class="muted mono" style="font-size:10px;">${escapeHtml(fa.team)}</span>` : ""}</span>
           <span class="row" style="gap:6px;">
             <span class="mono">${fa.pts.toFixed(1)}</span>
+            ${bid !== null ? `<span class="pbadge" style="background:var(--gold);">$${bid}</span>` : ""}
             <button class="btn btn-sm ${inList?'btn-danger':'btn-primary'}" style="padding:2px 8px; font-size:10.5px;" onclick="${inList ? `removeWaiverTarget('${fa.id}','${d.leagueId}')` : `addWaiverTarget('${fa.id}','${d.leagueId}')`}">${inList ? "Remove" : "+ Target"}</button>
           </span>
         </div>`;
