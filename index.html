@@ -403,6 +403,7 @@ let STATE = {
   matchupPlayerPoints: {},
   nflSchedule: null,
   matchupDetailScoring: null,
+  dashboardWeek: null,
   trending: null,
   trendingType: "add",
   transactions: null,
@@ -1020,6 +1021,68 @@ function renderHeader() {
 /* =========================================================
    RENDER: DASHBOARD
 ========================================================= */
+function computeStarterAlerts() {
+  if (!STATE.dashboardWeek) return [];
+  const leagues = getLeagues().filter(l => l.source !== "manual" && myTeamFor(l) && getLeagueData(l.id));
+  const alerts = [];
+  leagues.forEach(l => {
+    const data = getLeagueData(l.id);
+    const rosterId = myTeamFor(l);
+    const roster = data.rosters.find(r => String(r.roster_id) === String(rosterId));
+    if (!roster) return;
+    (roster.starters || []).forEach(pid => {
+      if (!pid || pid === "0") return;
+      const p = PLAYERS ? PLAYERS[pid] : null;
+      if (!p) return;
+      const name = playerName(p, pid);
+      if (p.injury_status) {
+        alerts.push({ league: l.nickname, name, detail: p.injury_status, kind: "status" });
+      }
+      if (p.team && STATE.nflSchedule && STATE.nflSchedule.length) {
+        const hasGame = STATE.nflSchedule.some(g => g.week === STATE.dashboardWeek && (g.home === p.team || g.away === p.team));
+        if (!hasGame) alerts.push({ league: l.nickname, name, detail: "Bye", kind: "bye" });
+      }
+    });
+  });
+  return alerts;
+}
+
+function scoresStripHtml() {
+  if (!STATE.dashboardWeek) return "";
+  const leagues = getLeagues().filter(l => l.source !== "manual" && myTeamFor(l) && getLeagueData(l.id));
+  if (leagues.length === 0) return "";
+  const rows = leagues.map(l => {
+    const data = getLeagueData(l.id);
+    const myRosterId = myTeamFor(l);
+    const matchups = (STATE.matchupsCache && STATE.matchupsCache[l.id]) || [];
+    const mine = matchups.find(m => String(m.roster_id) === String(myRosterId));
+    if (!mine) return null;
+    const opp = matchups.find(m => m.matchup_id === mine.matchup_id && String(m.roster_id) !== String(myRosterId));
+    const winning = opp ? mine.points > opp.points : null;
+    const color = winning === true ? "var(--win)" : winning === false ? "var(--loss)" : "var(--text)";
+    return `<div class="league-card-row" style="cursor:pointer;" onclick="viewMatchupDetail('${l.id}', ${STATE.dashboardWeek}, ${mine.matchup_id})">
+      <span>${escapeHtml(l.nickname)}</span>
+      <span class="mono" style="color:${color}; font-weight:700;">${(mine.points||0).toFixed(1)} - ${opp ? (opp.points||0).toFixed(1) : "-"}</span>
+    </div>`;
+  }).filter(Boolean);
+  if (rows.length === 0) return "";
+  return `
+    <div class="panel" style="padding:12px 14px; margin-top:14px;">
+      <div style="font-size:11px; font-weight:700; color:var(--text-faint); letter-spacing:0.06em; margin-bottom:6px;">WEEK ${STATE.dashboardWeek} SCORES</div>
+      ${rows.join("")}
+    </div>`;
+}
+
+function waiverReminderHtml() {
+  const leagues = getLeagues().filter(l => l.source !== "manual" && l.waiverSchedule && l.waiverSchedule.trim());
+  if (leagues.length === 0) return "";
+  return `
+    <div class="panel" style="padding:12px 14px; margin-top:14px;">
+      <div style="font-size:11px; font-weight:700; color:var(--text-faint); letter-spacing:0.06em; margin-bottom:6px;">WAIVER SCHEDULE</div>
+      ${leagues.map(l => `<div class="league-card-row"><span>${escapeHtml(l.nickname)}</span><span class="muted">${escapeHtml(l.waiverSchedule)}</span></div>`).join("")}
+    </div>`;
+}
+
 function renderDashboard() {
   const leagues = getLeagues();
   const wrap = document.createElement("div");
@@ -1032,6 +1095,26 @@ function renderDashboard() {
       </div>
     `));
   }
+
+  const alerts = computeStarterAlerts();
+  if (alerts.length > 0) {
+    wrap.appendChild(el(`
+      <div class="panel" style="padding:12px 14px; margin-top:16px; border-color:var(--loss);">
+        <div style="font-size:11px; font-weight:700; color:var(--loss); letter-spacing:0.06em; margin-bottom:6px;">LINEUP ALERTS - WEEK ${STATE.dashboardWeek || "?"}</div>
+        ${alerts.map(a => `
+          <div class="prow" style="justify-content:space-between;">
+            <span>${escapeHtml(a.name)} <span class="muted">(${escapeHtml(a.league)})</span></span>
+            <span class="pbadge" style="background:${a.kind==='bye' ? 'var(--text-faint)' : 'var(--gold)'};">${escapeHtml(a.detail)}</span>
+          </div>`).join("")}
+      </div>
+    `));
+  }
+
+  const scoresHtml = scoresStripHtml();
+  if (scoresHtml) wrap.appendChild(el(scoresHtml));
+
+  const waiverHtml = waiverReminderHtml();
+  if (waiverHtml) wrap.appendChild(el(waiverHtml));
 
   if (leagues.length === 0) {
     wrap.appendChild(el(`
@@ -2679,11 +2762,35 @@ function escapeHtml(str) {
 }
 window.navigate = navigate;
 
+window.loadDashboardExtras = async function () {
+  try {
+    if (!PLAYERS) PLAYERS = await ensurePlayers(false);
+    const state = await ensureNflState();
+    const week = (state.season_type === "pre" || !state.week) ? 1 : state.week;
+    STATE.dashboardWeek = week;
+    if (!STATE.nflSchedule) {
+      try {
+        const res = await fetch(`https://api.sleeper.app/schedule/nfl/regular/2025`);
+        STATE.nflSchedule = res.ok ? await res.json() : [];
+      } catch (e) { STATE.nflSchedule = []; }
+    }
+    const leagues = getLeagues().filter(l => l.source !== "manual" && myTeamFor(l) && getLeagueData(l.id));
+    for (const l of leagues) {
+      if (!STATE.matchupsCache[l.id]) {
+        try { STATE.matchupsCache[l.id] = await fetchJSON(`${SLEEPER}/league/${l.id}/matchups/${week}`) || []; }
+        catch (e) { STATE.matchupsCache[l.id] = []; }
+      }
+    }
+  } catch (e) { console.error("Dashboard extras failed", e); }
+  if (STATE.route === "dashboard") render();
+};
+
 /* boot */
 render();
 if (getCloudConfig()) { pullCloudNow(); }
 if (getLeagues().filter(l => l.source !== "manual").length > 0) {
   setTimeout(() => { if (!STATE.transactions) loadTransactions(); }, 300);
+  setTimeout(() => { loadDashboardExtras(); }, 600);
 }
 </script>
 </body>
