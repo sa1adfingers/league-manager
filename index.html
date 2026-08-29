@@ -1237,12 +1237,14 @@ function renderDashboard() {
     const top = standings[0];
     const myIdx = myTeamFor(l) ? standings.findIndex(s => String(s.rosterId) === String(myTeamFor(l))) : -1;
     const mine = myIdx >= 0 ? standings[myIdx] : null;
+    const nextRun = l.source !== "manual" ? fmtNextRun(nextWaiverRun(l)) : null;
     grid.appendChild(el(`
       <div class="league-card" onclick="openLeague('${l.id}')">
         <div class="league-card-title">${escapeHtml(l.nickname)} <span class="muted mono" style="font-size:9.5px;">${escapeHtml((l.source||"sleeper").toUpperCase())}</span></div>
         <div class="league-card-sub">${data ? escapeHtml(data.league.season) + " | " + data.rosters.length + " teams" : "Not synced yet"}</div>
         ${top ? `<div class="league-card-row"><span>Leader</span><span>${escapeHtml(top.name)} (${top.wins}-${top.losses}${top.ties?`-${top.ties}`:""})</span></div>` : ""}
         ${mine ? `<div class="league-card-row"><span>My Team</span><span>${escapeHtml(mine.name)} (${mine.wins}-${mine.losses}${mine.ties?`-${mine.ties}`:""}) - #${myIdx+1}</span></div>` : ""}
+        ${nextRun ? `<div class="league-card-row"><span>Next Waivers</span><span style="color:var(--gold); font-weight:700;">${escapeHtml(nextRun)}</span></div>` : ""}
         <div class="league-card-row"><span>${l.source === "manual" ? "Last updated" : "Last synced"}</span><span class="mono">${fmtTime(data?.syncedAt)}</span></div>
         <div class="league-card-actions" onclick="event.stopPropagation()">
           ${l.source === "manual" ? "" : `<button class="btn btn-sm" onclick="syncOne('${l.id}')">Sync</button>`}
