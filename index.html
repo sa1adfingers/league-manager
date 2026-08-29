@@ -1067,6 +1067,7 @@ function render() {
   else if (STATE.route === "rankings") body = renderRankings();
   else if (STATE.route === "exposure") body = renderExposure();
   else if (STATE.route === "waivertargets") body = renderWaiverTargets();
+  else if (STATE.route === "settings") body = renderSettings();
   else body = renderDashboard();
 
   app.appendChild(body);
@@ -1097,6 +1098,7 @@ function renderHeader() {
         <button class="nav-btn ${STATE.route==='trending'?'active':''}" onclick="goTrending()">Trending</button>
         <button class="nav-btn ${STATE.route==='exposure'?'active':''}" onclick="navigate('exposure')">Exposure</button>
         <button class="nav-btn ${STATE.route==='waivertargets'?'active':''}" onclick="navigate('waivertargets')">Waiver Targets</button>
+        <button class="nav-btn ${STATE.route==='settings'?'active':''}" onclick="navigate('settings')">Settings</button>
         <button class="nav-btn ${STATE.route==='finder'?'active':''}" onclick="navigate('finder')">Player Finder</button>
         <button class="nav-btn ${STATE.route==='compare'?'active':''}" onclick="navigate('compare')">Compare Rosters</button>
       </div>
@@ -1289,16 +1291,9 @@ function renderSync() {
     </div>
   `));
 
-  wrap.appendChild(renderCloudPanel());
-
-  const claimPanel = renderClaimTeamsPanel();
-  if (claimPanel) wrap.appendChild(claimPanel);
-
-  const pc = getPlayersCache();
   wrap.appendChild(el(`
-    <div class="row" style="margin-top:14px; justify-content:space-between;">
-      <span class="muted mono" style="font-size:11px;">Sleeper player database updated ${fmtTime(pc?.updatedAt)}</span>
-      <button class="btn btn-sm" onclick="refreshPlayers()">Refresh player DB</button>
+    <div class="row" style="justify-content:center; margin-top:14px;">
+      <button class="btn btn-sm" onclick="navigate('settings')">Manage cloud sync, teams, waivers & more &gt;</button>
     </div>
   `));
 
@@ -1376,6 +1371,90 @@ function renderClaimTeamsPanel() {
     </div>
   `);
 }
+
+/* =========================================================
+   RENDER: SETTINGS (one place for anything manual/editable -
+   profile, cloud sync, team assignments, waiver schedules, player DB)
+========================================================= */
+function renderSettings() {
+  const wrap = document.createElement("div");
+  const profile = getProfile();
+
+  wrap.appendChild(el(`<div style="margin-top:16px;"></div>`));
+
+  // Profile
+  wrap.appendChild(el(`
+    <div class="panel" style="padding:14px;">
+      <div style="font-size:13px; font-weight:700; margin-bottom:4px;">Profile</div>
+      <div class="row" style="justify-content:space-between;">
+        <span class="muted" style="font-size:11.5px;">${profile ? `Viewing as "${escapeHtml(profile)}"` : "No name set yet"}</span>
+        <button class="btn btn-sm" onclick="changeProfile()">${profile ? "Change name" : "Set your name"}</button>
+      </div>
+    </div>
+  `));
+
+  // Cloud sync
+  wrap.appendChild(el(`<div style="margin-top:14px;"></div>`));
+  wrap.appendChild(renderCloudPanel());
+
+  // My Teams - every league, not just unclaimed ones, so you can change your mind anytime
+  const allLeagues = getLeagues();
+  wrap.appendChild(el(`
+    <div class="panel" style="padding:14px; margin-top:14px;">
+      <div style="font-size:13px; font-weight:700; margin-bottom:4px;">My Teams</div>
+      <div class="muted" style="font-size:11.5px; margin-bottom:10px;">
+        Which roster is yours in each league, tracked under "${escapeHtml(profile || "your name")}."
+      </div>
+      ${allLeagues.length === 0 ? '<div class="muted" style="font-size:11.5px;">No leagues added yet.</div>' : allLeagues.map(l => {
+        const data = getLeagueData(l.id);
+        if (!data) {
+          return `
+            <div class="row" style="justify-content:space-between; padding:6px 0; border-top:1px solid var(--line);">
+              <span style="font-size:12.5px;">${escapeHtml(l.nickname)}</span>
+              <button class="btn btn-sm" onclick="syncOne('${l.id}')" ${STATE.loading?"disabled":""}>Sync to select team</button>
+            </div>`;
+        }
+        const raw = rawTeamPick(l);
+        return `
+          <div class="row" style="justify-content:space-between; padding:6px 0; border-top:1px solid var(--line);">
+            <span style="font-size:12.5px;">${escapeHtml(l.nickname)}</span>
+            <select onchange="setMyTeam('${l.id}', this.value)" style="font-size:12px;">
+              <option value="" ${raw===null?"selected":""}>Decide later...</option>
+              <option value="NONE" ${raw==="NONE"?"selected":""}>Not my league</option>
+              ${data.rosters.map(r => `<option value="${r.roster_id}" ${String(raw)===String(r.roster_id)?"selected":""}>${escapeHtml(teamLabel(r, data.users))}</option>`).join("")}
+            </select>
+          </div>`;
+      }).join("")}
+    </div>
+  `));
+
+  // Waiver schedules - one editable card per non-manual league
+  const scheduleLeagues = allLeagues.filter(l => l.source !== "manual" && getLeagueData(l.id));
+  wrap.appendChild(el(`
+    <div class="panel" style="padding:14px; margin-top:14px;">
+      <div style="font-size:13px; font-weight:700; margin-bottom:4px;">Waiver Schedules</div>
+      <div class="muted" style="font-size:11.5px; margin-bottom:4px;">
+        Shown as "Next Waivers" on the Dashboard and in the weekly summary.
+      </div>
+      ${scheduleLeagues.length === 0 ? '<div class="muted" style="font-size:11.5px; margin-top:6px;">No synced leagues yet.</div>' : scheduleLeagues.map(l => waiverInfoHtml(l)).join("")}
+    </div>
+  `));
+
+  // Player database
+  const pc = getPlayersCache();
+  wrap.appendChild(el(`
+    <div class="panel" style="padding:14px; margin-top:14px;">
+      <div style="font-size:13px; font-weight:700; margin-bottom:4px;">Player Database</div>
+      <div class="row" style="justify-content:space-between;">
+        <span class="muted mono" style="font-size:11px;">Updated ${fmtTime(pc?.updatedAt)}</span>
+        <button class="btn btn-sm" onclick="refreshPlayers()">Refresh player DB</button>
+      </div>
+    </div>
+  `));
+
+  return wrap;
+}
+
 
 /* =========================================================
    RENDER: LEAGUE DETAIL
@@ -2717,7 +2796,6 @@ window.applyWaiverSuggestion = function (leagueId, time) {
 
 function renderTransactions() {
   const wrap = document.createElement("div");
-  const relevantLeagues = getLeagues().filter(l => l.source !== "manual" && !isDismissedByMe(l) && getLeagueData(l.id));
 
   wrap.appendChild(el(`
     <div class="row" style="margin-top:16px; justify-content:space-between; flex-wrap:wrap; gap:8px;">
@@ -2727,18 +2805,6 @@ function renderTransactions() {
       </button>
     </div>
   `));
-
-  if (relevantLeagues.length > 0) {
-    const panel = document.createElement("div");
-    panel.className = "panel";
-    panel.style.padding = "10px 14px";
-    panel.innerHTML = `
-      <div class="muted" style="font-size:10px; letter-spacing:0.08em; font-weight:700; margin-bottom:2px;">WAIVER INFO</div>
-      ${relevantLeagues.map(l => waiverInfoHtml(l)).join("")}
-    `;
-    wrap.appendChild(panel);
-    wrap.appendChild(el(`<div style="margin-top:14px;"></div>`));
-  }
 
   if (STATE.loading || !STATE.transactions) {
     wrap.appendChild(el(`<div class="empty-state"><p>Loading transactions...</p></div>`));
