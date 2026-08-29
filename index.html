@@ -361,6 +361,24 @@ function teamLabel(roster, users) {
   if (owner?.display_name) return owner.display_name;
   return `Roster ${roster.roster_id}`;
 }
+function formatLeagueDescription(league) {
+  if (!league) return "";
+  const teams = league.total_rosters || null;
+  const s = league.settings || {};
+  const typeLabel = s.type === 2 ? "Dynasty" : s.type === 1 ? "Keeper" : "Redraft";
+  const positions = league.roster_positions || [];
+  const qbSlots = positions.filter(p => p === "QB").length;
+  const formatLabel = positions.includes("SUPER_FLEX") ? "SF" : (qbSlots > 1 ? "2QB" : "");
+  const scoring = league.scoring_settings || {};
+  const rec = scoring.rec;
+  let pprLabel = "Standard";
+  if (rec === 1) pprLabel = "PPR";
+  else if (rec === 0.5) pprLabel = "Half PPR";
+  else if (rec) pprLabel = `${rec}PPR`;
+  const tep = scoring.bonus_rec_te ? "TEP" : "";
+  return [teams ? `${teams}-Team` : null, typeLabel, formatLabel || null, pprLabel, tep || null]
+    .filter(Boolean).join(" ");
+}
 function computeStandings(rosters, users) {
   const rows = rosters.map(r => {
     const s = r.settings || {};
@@ -1243,7 +1261,7 @@ function renderDashboard() {
     grid.appendChild(el(`
       <div class="league-card" onclick="openLeague('${l.id}')">
         <div class="league-card-title">${escapeHtml(l.nickname)} <span class="muted mono" style="font-size:9.5px;">${escapeHtml((l.source||"sleeper").toUpperCase())}</span></div>
-        <div class="league-card-sub">${data ? escapeHtml(data.league.season) + " | " + data.rosters.length + " teams" : "Not synced yet"}</div>
+        <div class="league-card-sub">${data ? escapeHtml(formatLeagueDescription(data.league)) : "Not synced yet"}</div>
         ${top ? `<div class="league-card-row"><span>Leader</span><span>${escapeHtml(top.name)} (${top.wins}-${top.losses}${top.ties?`-${top.ties}`:""})</span></div>` : ""}
         ${mine ? `<div class="league-card-row"><span>My Team</span><span>${escapeHtml(mine.name)} (${mine.wins}-${mine.losses}${mine.ties?`-${mine.ties}`:""}) - #${myIdx+1}</span></div>` : ""}
         ${nextRun ? `<div class="league-card-row"><span>Next Waivers</span><span style="color:var(--gold); font-weight:700;">${escapeHtml(nextRun)}</span></div>` : ""}
