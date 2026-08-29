@@ -213,6 +213,41 @@ function isDismissedByMe(league) {
   return rawTeamPick(league) === "NONE";
 }
 
+/* Team strategy: posture + untradeables, keyed per profile just like teams,
+   so a shared League Manager doesn't mix up two people's strategy notes. */
+function myStrategy(league) {
+  const profile = getProfile();
+  if (!profile || !league.strategy) return { posture: "", untradeables: [] };
+  const s = league.strategy[profile];
+  return s || { posture: "", untradeables: [] };
+}
+async function saveMyStrategy(leagueId, patch) {
+  const profile = getProfile();
+  if (!profile) return;
+  const leagues = getLeagues();
+  const l = leagues.find(x => x.id === leagueId);
+  if (!l) return;
+  if (!l.strategy) l.strategy = {};
+  const current = l.strategy[profile] || { posture: "", untradeables: [] };
+  l.strategy[profile] = Object.assign({}, current, patch);
+  saveLeagues(leagues);
+  if (getCloudConfig()) {
+    try { await cloudUpsertLeague(l); } catch (e) { console.error("Cloud push failed", e); }
+  }
+  render();
+}
+window.setPosture = function (leagueId, posture) {
+  const current = myStrategy(getLeagues().find(x => x.id === leagueId) || {});
+  saveMyStrategy(leagueId, { posture: current.posture === posture ? "" : posture });
+};
+window.toggleUntradeable = function (leagueId, playerId) {
+  const league = getLeagues().find(x => x.id === leagueId);
+  const current = myStrategy(league || {});
+  const list = current.untradeables || [];
+  const next = list.includes(playerId) ? list.filter(id => id !== playerId) : list.concat(playerId);
+  saveMyStrategy(leagueId, { untradeables: next });
+};
+
 /* =========================================================
    CLOUD SYNC (Supabase) - syncs only the saved-league list
    (id + nickname) across devices. Roster/standings/player data
@@ -242,7 +277,8 @@ async function cloudPullLeagues() {
     id: r.id, nickname: r.nickname, addedAt: r.added_at, teams: r.teams || {},
     source: r.source || "sleeper", manualData: r.manual_data || null,
     waiverSchedule: r.waiver_schedule || "",
-    waiverDaily: !!r.waiver_daily, waiverDays: r.waiver_days || [], waiverTime: r.waiver_time || ""
+    waiverDaily: !!r.waiver_daily, waiverDays: r.waiver_days || [], waiverTime: r.waiver_time || "",
+    strategy: r.strategy || {}
   }));
 }
 async function cloudUpsertLeague(l) {
@@ -250,7 +286,8 @@ async function cloudUpsertLeague(l) {
     id: l.id, nickname: l.nickname, added_at: l.addedAt || Date.now(),
     teams: l.teams || {}, source: l.source || "sleeper",
     waiver_schedule: l.waiverSchedule || "",
-    waiver_daily: !!l.waiverDaily, waiver_days: l.waiverDays || [], waiver_time: l.waiverTime || ""
+    waiver_daily: !!l.waiverDaily, waiver_days: l.waiverDays || [], waiver_time: l.waiverTime || "",
+    strategy: l.strategy || {}
   };
   if (l.source === "manual") {
     body.manual_data = getLeagueData(l.id) || null; // manual leagues have no other source to re-sync from
@@ -749,11 +786,14 @@ async function mergeWithCloud() {
       const localL = merged[idx];
       const localTeams = localL.teams || {};
       const cloudTeams = cl.teams || {};
+      const localStrategy = localL.strategy || {};
+      const cloudStrategy = cl.strategy || {};
       // Prefer non-empty values rather than blindly overwriting with the cloud
       // copy - a background sync landing right after a local edit shouldn't be
       // able to silently erase it just because the cloud hadn't caught up yet.
       merged[idx] = Object.assign({}, cl, {
         teams: Object.assign({}, localTeams, cloudTeams),
+        strategy: Object.assign({}, localStrategy, cloudStrategy),
         nickname: preferNonEmpty(cl.nickname, localL.nickname),
         waiverSchedule: preferNonEmpty(cl.waiverSchedule, localL.waiverSchedule),
         waiverDaily: cl.waiverDaily !== undefined ? cl.waiverDaily : localL.waiverDaily,
@@ -1443,6 +1483,18 @@ function renderSettings() {
             </select>
           </div>`;
       }).join("")}
+    </div>
+  `));
+
+  // Team strategy - posture + untradeables, only for leagues where you've claimed a team
+  const strategyLeagues = allLeagues.filter(l => l.source !== "manual" && myTeamFor(l) && getLeagueData(l.id));
+  wrap.appendChild(el(`
+    <div class="panel" style="padding:14px; margin-top:14px;">
+      <div style="font-size:13px; font-weight:700; margin-bottom:4px;">Team Strategy</div>
+      <div class="muted" style="font-size:11.5px; margin-bottom:4px;">
+        Posture and untradeables per league - readable by fantasy-mcp if you've wired it up to this Supabase project.
+      </div>
+      ${strategyLeagues.length === 0 ? '<div class="muted" style="font-size:11.5px; margin-top:6px;">Set "My team" on a league above to set its strategy.</div>' : strategyLeagues.map(l => teamStrategyHtml(l)).join("")}
     </div>
   `));
 
@@ -2738,6 +2790,39 @@ function renderTrending() {
 /* =========================================================
    RENDER: TRANSACTIONS
 ========================================================= */
+function teamStrategyHtml(league) {
+  const data = getLeagueData(league.id);
+  if (!data) return "";
+  const myRosterId = myTeamFor(league);
+  const myRoster = data.rosters.find(r => String(r.roster_id) === String(myRosterId));
+  const strat = myStrategy(league);
+  const rostered = myRoster ? (myRoster.players || []) : [];
+
+  return `
+    <div style="padding:8px 0; border-top:1px solid var(--line);">
+      <div style="font-size:11.5px; font-weight:700; margin-bottom:5px;">${escapeHtml(league.nickname)}</div>
+      <div class="row" style="gap:4px; margin-bottom:8px;">
+        <button class="btn btn-sm ${strat.posture==='rebuilding'?'btn-primary':''}" onclick="setPosture('${league.id}','rebuilding')">Rebuilding</button>
+        <button class="btn btn-sm ${strat.posture==='contending'?'btn-primary':''}" onclick="setPosture('${league.id}','contending')">Contending</button>
+      </div>
+      <div class="muted" style="font-size:10.5px; margin-bottom:4px;">Untradeables</div>
+      ${(strat.untradeables && strat.untradeables.length) ? strat.untradeables.map(pid => {
+        const p = PLAYERS ? PLAYERS[pid] : null;
+        return `<div class="prow" style="justify-content:space-between;">
+          <span class="pname">${escapeHtml(playerName(p, pid))}</span>
+          <button class="btn btn-sm btn-danger" style="padding:2px 8px; font-size:10.5px;" onclick="toggleUntradeable('${league.id}','${pid}')">Remove</button>
+        </div>`;
+      }).join("") : '<div class="muted" style="font-size:11px;">None set.</div>'}
+      <select onchange="if(this.value){toggleUntradeable('${league.id}',this.value); this.value='';}" style="font-size:11.5px; margin-top:6px; width:100%;">
+        <option value="">+ Mark a player untradeable...</option>
+        ${rostered.filter(pid => !(strat.untradeables||[]).includes(pid)).map(pid => {
+          const p = PLAYERS ? PLAYERS[pid] : null;
+          return `<option value="${pid}">${escapeHtml(playerName(p, pid))}</option>`;
+        }).join("")}
+      </select>
+    </div>`;
+}
+
 function waiverInfoHtml(league) {
   const data = getLeagueData(league.id);
   if (!data) return "";
