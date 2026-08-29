@@ -241,14 +241,16 @@ async function cloudPullLeagues() {
   return (rows || []).map(r => ({
     id: r.id, nickname: r.nickname, addedAt: r.added_at, teams: r.teams || {},
     source: r.source || "sleeper", manualData: r.manual_data || null,
-    waiverSchedule: r.waiver_schedule || ""
+    waiverSchedule: r.waiver_schedule || "",
+    waiverDaily: !!r.waiver_daily, waiverDays: r.waiver_days || [], waiverTime: r.waiver_time || ""
   }));
 }
 async function cloudUpsertLeague(l) {
   const body = {
     id: l.id, nickname: l.nickname, added_at: l.addedAt || Date.now(),
     teams: l.teams || {}, source: l.source || "sleeper",
-    waiver_schedule: l.waiverSchedule || ""
+    waiver_schedule: l.waiverSchedule || "",
+    waiver_daily: !!l.waiverDaily, waiver_days: l.waiverDays || [], waiver_time: l.waiverTime || ""
   };
   if (l.source === "manual") {
     body.manual_data = getLeagueData(l.id) || null; // manual leagues have no other source to re-sync from
@@ -377,6 +379,69 @@ function fmtTime(ts) {
   if (!ts) return "never";
   const d = new Date(ts);
   return d.toLocaleDateString([], {month:"short", day:"numeric"}) + " " + d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+}
+
+/* =========================================================
+   WAIVER SCHEDULE
+   Sleeper's daily_waivers_hour is confirmed (empirically, against
+   a real league) to be an hour-of-day in US Pacific Time. This
+   converts it to a local HH:MM for pre-filling the time picker.
+   Only the "is this league daily" detection is Sleeper-verified -
+   the specific weekday for non-daily leagues isn't, so that part
+   always starts blank for the user to set.
+========================================================= */
+const WAIVER_DAY_LABELS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+function pacificHourToLocalTimeString(hour) {
+  const now = new Date();
+  const fmtPT = new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", hour12: false, year: "numeric", month: "2-digit", day: "2-digit" });
+  const parts = fmtPT.formatToParts(now);
+  const get = t => parts.find(p => p.type === t).value;
+  let guessUTC = new Date(Date.UTC(+get("year"), +get("month") - 1, +get("day"), hour, 0, 0));
+  const fmtCheck = new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", hour12: false, hour: "2-digit" });
+  let observed = parseInt(fmtCheck.format(guessUTC), 10) % 24;
+  let delta = hour - observed;
+  if (delta > 12) delta -= 24;
+  if (delta < -12) delta += 24;
+  guessUTC = new Date(guessUTC.getTime() + delta * 3600 * 1000);
+  return String(guessUTC.getHours()).padStart(2, "0") + ":" + String(guessUTC.getMinutes()).padStart(2, "0");
+}
+
+function suggestWaiverScheduleFromSleeper(league) {
+  const s = league && league.settings;
+  if (!s) return null;
+  if (s.daily_waivers === 1) {
+    const time = typeof s.daily_waivers_hour === "number" ? pacificHourToLocalTimeString(s.daily_waivers_hour) : null;
+    return { daily: true, days: [0,1,2,3,4,5,6], time };
+  }
+  return null; // non-daily day-of-week mapping isn't verified yet - leave for manual entry
+}
+
+function nextWaiverRun(l) {
+  if (!l.waiverDays || !l.waiverDays.length || !l.waiverTime) return null;
+  const [hh, mm] = l.waiverTime.split(":").map(Number);
+  if (isNaN(hh) || isNaN(mm)) return null;
+  const now = new Date();
+  for (let addDays = 0; addDays <= 7; addDays++) {
+    const candidate = new Date(now);
+    candidate.setDate(now.getDate() + addDays);
+    candidate.setHours(hh, mm, 0, 0);
+    if (candidate < now) continue;
+    if (l.waiverDays.includes(candidate.getDay())) return candidate;
+  }
+  return null;
+}
+
+function fmtNextRun(d) {
+  if (!d) return null;
+  const now = new Date();
+  const isToday = d.toDateString() === now.toDateString();
+  const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1);
+  const isTomorrow = d.toDateString() === tomorrow.toDateString();
+  const timeStr = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (isToday) return "Today " + timeStr;
+  if (isTomorrow) return "Tomorrow " + timeStr;
+  return d.toLocaleDateString([], { weekday: "short" }) + " " + timeStr;
 }
 
 const POS_GROUPS = ["QB","RB","WR","TE","DL","LB","DB","K","DEF"];
@@ -648,6 +713,12 @@ window.renameLeague = async function (id) {
 };
 
 /* -------- cloud sync connect/disconnect -------- */
+function preferNonEmpty(cloudVal, localVal) {
+  if (cloudVal === undefined || cloudVal === null || cloudVal === "") return localVal;
+  if (Array.isArray(cloudVal) && cloudVal.length === 0) return localVal;
+  return cloudVal;
+}
+
 async function mergeWithCloud() {
   const cloudLeagues = await cloudPullLeagues();
   const local = getLeagues();
@@ -657,9 +728,20 @@ async function mergeWithCloud() {
     if (idx === -1) {
       merged.push(cl);
     } else {
-      const localTeams = merged[idx].teams || {};
+      const localL = merged[idx];
+      const localTeams = localL.teams || {};
       const cloudTeams = cl.teams || {};
-      merged[idx] = Object.assign({}, cl, { teams: Object.assign({}, localTeams, cloudTeams) });
+      // Prefer non-empty values rather than blindly overwriting with the cloud
+      // copy - a background sync landing right after a local edit shouldn't be
+      // able to silently erase it just because the cloud hadn't caught up yet.
+      merged[idx] = Object.assign({}, cl, {
+        teams: Object.assign({}, localTeams, cloudTeams),
+        nickname: preferNonEmpty(cl.nickname, localL.nickname),
+        waiverSchedule: preferNonEmpty(cl.waiverSchedule, localL.waiverSchedule),
+        waiverDaily: cl.waiverDaily !== undefined ? cl.waiverDaily : localL.waiverDaily,
+        waiverDays: preferNonEmpty(cl.waiverDays, localL.waiverDays),
+        waiverTime: preferNonEmpty(cl.waiverTime, localL.waiverTime),
+      });
     }
     // manual leagues have no API to re-sync from, so the cloud copy of their
     // standings IS the source of truth - write it into local league data.
@@ -1078,12 +1160,16 @@ function scoresStripHtml() {
 }
 
 function waiverReminderHtml() {
-  const leagues = getLeagues().filter(l => l.source !== "manual" && l.waiverSchedule && l.waiverSchedule.trim());
+  const leagues = getLeagues()
+    .filter(l => l.source !== "manual" && l.waiverDays && l.waiverDays.length && l.waiverTime)
+    .map(l => ({ l, next: nextWaiverRun(l) }))
+    .filter(x => x.next)
+    .sort((a, b) => a.next - b.next);
   if (leagues.length === 0) return "";
   return `
     <div class="panel" style="padding:12px 14px; margin-top:14px;">
-      <div style="font-size:11px; font-weight:700; color:var(--text-faint); letter-spacing:0.06em; margin-bottom:6px;">WAIVER SCHEDULE</div>
-      ${leagues.map(l => `<div class="league-card-row"><span>${escapeHtml(l.nickname)}</span><span class="muted">${escapeHtml(l.waiverSchedule)}</span></div>`).join("")}
+      <div style="font-size:11px; font-weight:700; color:var(--text-faint); letter-spacing:0.06em; margin-bottom:6px;">NEXT WAIVER RUNS</div>
+      ${leagues.map(({l, next}) => `<div class="league-card-row"><span>${escapeHtml(l.nickname)}</span><span class="muted">${escapeHtml(fmtNextRun(next))}${l.waiverDaily ? " (daily)" : ""}</span></div>`).join("")}
     </div>`;
 }
 
@@ -2569,33 +2655,62 @@ function waiverInfoHtml(league) {
     }
   }
   if (s.trade_deadline) parts.push(`Trade deadline Week ${s.trade_deadline}`);
-  const scheduleId = `waiver-sched-${league.id}`;
+
+  const days = league.waiverDays || [];
+  const suggestion = (!days.length && league.source !== "manual") ? suggestWaiverScheduleFromSleeper(data.league) : null;
+  const nextRun = fmtNextRun(nextWaiverRun(league));
+
   return `
-    <div style="padding:7px 0; border-top:1px solid var(--line);">
+    <div style="padding:8px 0; border-top:1px solid var(--line);">
       <div style="font-size:11.5px;">
         <span style="font-weight:700;">${escapeHtml(league.nickname)}</span>
         ${parts.length ? `<span class="muted"> - ${parts.join(" | ")}</span>` : ""}
       </div>
-      <div class="row" style="margin-top:5px; gap:6px;">
-        <input id="${scheduleId}" type="text" placeholder="Waiver day/time (e.g. Wed 8:00 PM ET)" value="${escapeHtml(league.waiverSchedule || "")}" style="flex:1; min-width:180px; font-size:11.5px; padding:6px 8px;" />
-        <button class="btn btn-sm" onclick="saveWaiverSchedule('${league.id}')">Save</button>
+      ${nextRun ? `<div style="font-size:11.5px; color:var(--gold); font-weight:700; margin-top:2px;">Next waiver run: ${nextRun}</div>` : ""}
+      ${suggestion ? `
+        <div class="muted" style="font-size:11px; margin-top:5px;">
+          Sleeper says this league runs daily waivers${suggestion.time ? ` around ${suggestion.time}` : ""}.
+          <button class="btn btn-sm" style="padding:2px 8px; font-size:10.5px;" onclick="applyWaiverSuggestion('${league.id}', ${suggestion.time ? `'${suggestion.time}'` : "null"})">Use this</button>
+        </div>` : ""}
+      <div class="row" style="margin-top:6px; gap:4px; flex-wrap:wrap;">
+        ${WAIVER_DAY_LABELS.map((label, idx) => `
+          <button class="btn btn-sm ${days.includes(idx) ? "btn-primary" : ""}" style="padding:3px 8px; font-size:10.5px;" onclick="toggleWaiverDay('${league.id}', ${idx})">${label}</button>
+        `).join("")}
+        <button class="btn btn-sm" style="padding:3px 8px; font-size:10.5px;" onclick="setWaiverDaily('${league.id}')">Daily</button>
+      </div>
+      <div class="row" style="margin-top:6px; gap:6px;">
+        <input id="waiver-time-${league.id}" type="time" value="${escapeHtml(league.waiverTime || "")}" style="font-size:11.5px; padding:5px 8px;" onchange="setWaiverTime('${league.id}', this.value)" />
+        <span class="muted" style="font-size:10px;">your local time</span>
       </div>
     </div>`;
 }
 
-window.saveWaiverSchedule = async function (leagueId) {
-  const input = document.getElementById(`waiver-sched-${leagueId}`);
-  if (!input) return;
-  const value = input.value.trim();
+async function persistWaiverField(leagueId, patch) {
   const leagues = getLeagues();
   const l = leagues.find(x => x.id === leagueId);
   if (!l) return;
-  l.waiverSchedule = value;
+  Object.assign(l, patch);
   saveLeagues(leagues);
   if (getCloudConfig()) {
     try { await cloudUpsertLeague(l); } catch (e) { console.error("Cloud push failed", e); }
   }
   render();
+}
+
+window.toggleWaiverDay = function (leagueId, dayIdx) {
+  const l = getLeagues().find(x => x.id === leagueId);
+  const current = (l && l.waiverDays) || [];
+  const next = current.includes(dayIdx) ? current.filter(d => d !== dayIdx) : current.concat(dayIdx).sort();
+  persistWaiverField(leagueId, { waiverDays: next, waiverDaily: next.length === 7 });
+};
+window.setWaiverDaily = function (leagueId) {
+  persistWaiverField(leagueId, { waiverDays: [0,1,2,3,4,5,6], waiverDaily: true });
+};
+window.setWaiverTime = function (leagueId, value) {
+  persistWaiverField(leagueId, { waiverTime: value });
+};
+window.applyWaiverSuggestion = function (leagueId, time) {
+  persistWaiverField(leagueId, { waiverDays: [0,1,2,3,4,5,6], waiverDaily: true, waiverTime: time || "" });
 };
 
 function renderTransactions() {
