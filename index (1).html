@@ -1,0 +1,3273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+<title>Fantasy Football League Manager</title>
+<style>
+  :root {
+    --bg: #101c16;
+    --panel: #16261e;
+    --card: #1d3025;
+    --card-hover: #24392c;
+    --line: #2c4436;
+    --text: #eae7da;
+    --text-dim: #93a89a;
+    --text-faint: #5f7568;
+    --gold: #d7a53e;
+    --win: #5fa37a;
+    --loss: #c1503f;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  #app { max-width: 1080px; margin: 0 auto; padding: 18px 18px 60px; }
+
+  .yardline {
+    height: 6px;
+    background: repeating-linear-gradient(115deg, var(--line) 0px, var(--line) 2px, transparent 2px, transparent 14px);
+    opacity: 0.6;
+    margin: 14px 0;
+    border-radius: 2px;
+  }
+
+  /* header / nav */
+  .topbar { display:flex; align-items:flex-end; justify-content:space-between; flex-wrap:wrap; gap:10px; }
+  .brand-eyebrow { font-size:11px; letter-spacing:0.18em; color:var(--gold); font-weight:700; }
+  .brand-title { margin:2px 0 0; font-size:26px; font-weight:800; letter-spacing:-0.01em; }
+  .nav { display:flex; gap:4px; margin-top:16px; flex-wrap:wrap; }
+  .nav-btn {
+    background:none; border:none; color:var(--text-faint); font-size:13px; font-weight:700;
+    letter-spacing:0.03em; padding:8px 4px; cursor:pointer; border-bottom:2px solid transparent; margin-right:16px;
+  }
+  .nav-btn.active { color:var(--text); border-bottom-color:var(--gold); }
+
+  /* buttons / inputs */
+  .btn {
+    display:inline-flex; align-items:center; gap:6px; padding:9px 14px; border-radius:8px;
+    border:1px solid var(--line); background:var(--card); color:var(--text); font-size:13px;
+    font-weight:600; cursor:pointer; white-space:nowrap;
+  }
+  .btn:hover { background:var(--card-hover); }
+  .btn:disabled { opacity:0.5; cursor:default; }
+  .btn-primary { background:var(--gold); border-color:var(--gold); color:#1a1305; }
+  .btn-primary:hover { background:#e2b34e; }
+  .btn-danger { color:var(--loss); }
+  .btn-sm { padding:6px 10px; font-size:12px; }
+  input[type=text], select {
+    background:var(--panel); border:1px solid var(--line); color:var(--text);
+    padding:10px 12px; border-radius:8px; font-size:14px; outline:none;
+  }
+  input[type=text]:focus, select:focus { border-color: var(--gold); }
+  input::placeholder { color: var(--text-faint); }
+
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .banner-error {
+    display:flex; align-items:center; gap:8px; color:var(--loss); font-size:13px;
+    background:rgba(193,80,63,0.1); border:1px solid rgba(193,80,63,0.35); padding:8px 12px;
+    border-radius:8px; margin-top:12px;
+  }
+  .muted { color: var(--text-faint); }
+  .mono { font-family: ui-monospace, "SF Mono", Consolas, monospace; }
+
+  /* dashboard cards */
+  .league-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(260px,1fr)); gap:14px; margin-top:16px; }
+  .league-card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; cursor:pointer; }
+  .league-card:hover { border-color: var(--gold); }
+  .league-card-title { font-weight:700; font-size:15px; margin-bottom:2px; }
+  .league-card-sub { font-size:11px; color:var(--text-faint); margin-bottom:10px; }
+  .league-card-row { display:flex; justify-content:space-between; font-size:12.5px; padding:3px 0; border-top:1px solid var(--line); }
+  .league-card-actions { display:flex; gap:6px; margin-top:10px; }
+  .empty-state { text-align:center; color:var(--text-faint); padding:60px 20px; }
+
+  /* tabs / panel */
+  .tabs { display:flex; align-items:center; gap:4px; margin: 16px 0 14px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  table { width:100%; border-collapse:collapse; }
+  thead th { text-align:left; font-size:11px; letter-spacing:0.08em; color:var(--text-faint); padding:10px 14px; border-bottom:1px solid var(--line); font-weight:700; }
+  .num { text-align:right !important; }
+  tbody tr:nth-child(odd) { background: rgba(255,255,255,0.015); }
+  tbody td { padding:10px 14px; font-size:14px; border-bottom:1px solid var(--line); }
+  .rank { color:var(--gold); font-weight:800; font-family: ui-monospace, monospace; }
+
+  /* roster cards */
+  .roster-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(260px,1fr)); gap:14px; }
+  .rcard { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .rcard-head { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:10px; border-bottom:1px solid var(--line); padding-bottom:8px; }
+  .rcard-title { font-weight:700; font-size:14px; }
+  .rcard-count { font-size:11px; color:var(--text-faint); }
+  .rcard-section { margin-bottom:10px; }
+  .rcard-section:last-child { margin-bottom:0; }
+  .rcard-section-label { font-size:10px; letter-spacing:0.1em; color:var(--text-faint); font-weight:700; margin-bottom:6px; }
+  .prow { display:flex; align-items:center; gap:6px; font-size:12.5px; padding:3px 0; flex-wrap:nowrap; }
+  .prow.empty { opacity:0.55; }
+  .slot-tag { font-size:9.5px; font-weight:700; color:var(--text-faint); min-width:28px; flex-shrink:0; font-family: ui-monospace, monospace; white-space:nowrap; }
+  .pname { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pbadge { font-size:9.5px; font-weight:800; color:#10160e; padding:1px 6px; border-radius:4px; letter-spacing:0.02em; flex-shrink:0; }
+  .pteam { font-size:10px; color:var(--text-faint); width:26px; text-align:right; font-family: ui-monospace, monospace; flex-shrink:0; }
+
+  /* finder */
+  .finder-result { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px; }
+  .finder-player-name { font-weight:700; font-size:14px; }
+  .finder-hit { display:flex; justify-content:space-between; font-size:12.5px; padding:4px 0; border-top:1px solid var(--line); margin-top:6px; }
+
+  /* compare */
+  .compare-grid { display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
+  @media (max-width:680px) { .compare-grid { grid-template-columns: 1fr; } }
+  .mu-slot-row { display:grid; grid-template-columns: 1fr 40px 52px 40px 1fr; column-gap:6px; row-gap:2px; align-items:center; padding:9px 0; border-top:1px solid var(--line); }
+  .mu-name { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .mu-meta { font-size:10px; color:var(--text-faint); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .mu-score { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-weight:800; font-size:13px; }
+  .mu-score-sub { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size:10px; color:var(--text-faint); }
+  .mu-slot-label { text-align:center; font-weight:800; font-size:14px; color:var(--gold); letter-spacing:0.03em; }
+  .mu-statline { font-size:9.5px; color:var(--text-faint); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  @media (max-width:480px) {
+    .mu-slot-row { grid-template-columns: 1fr 32px 40px 32px 1fr; column-gap:4px; padding:7px 0; }
+    .mu-name, .mu-score { font-size:11.5px; }
+    .mu-meta, .mu-score-sub { font-size:9px; }
+    .mu-statline { font-size:8.5px; }
+    .mu-slot-label { font-size:12px; }
+  }
+  .compare-picker { display:flex; flex-direction:column; gap:6px; margin-bottom:10px; }
+
+  .spin { display:inline-block; animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner {
+    display:inline-block; width:10px; height:10px;
+    border:2px solid currentColor; border-right-color:transparent;
+    border-radius:50%; animation: spin 0.7s linear infinite;
+    vertical-align:-1px;
+  }
+
+  @media (max-width:520px) {
+    #app { padding:14px 12px 40px; }
+    .brand-title { font-size:21px; }
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="modal-root"></div>
+
+<script>
+/* =========================================================
+   STORAGE
+========================================================= */
+const STORE_PREFIX = "slm.";
+const DB = {
+  get(key, fallback) {
+    try {
+      const raw = localStorage.getItem(STORE_PREFIX + key);
+      return raw ? JSON.parse(raw) : fallback;
+    } catch (e) { return fallback; }
+  },
+  set(key, value) {
+    try {
+      localStorage.setItem(STORE_PREFIX + key, JSON.stringify(value));
+      return true;
+    } catch (e) {
+      console.error("Storage write failed", e);
+      return false;
+    }
+  },
+  remove(key) { localStorage.removeItem(STORE_PREFIX + key); }
+};
+
+function getLeagues() { return DB.get("leagues", []); }
+function saveLeagues(list) { DB.set("leagues", list); }
+function getLeagueData(id) { return DB.get("league." + id, null); }
+function saveLeagueData(id, data) { DB.set("league." + id, data); }
+function removeLeagueData(id) { DB.remove("league." + id); }
+function getPlayersCache() { return DB.get("players", null); }
+function savePlayersCache(obj) { DB.set("players", obj); }
+
+function getCloudConfig() { return DB.get("cloud", null); }
+function saveCloudConfig(cfg) { DB.set("cloud", cfg); }
+function clearCloudConfig() { DB.remove("cloud"); }
+
+/* Profile: which person is using this device. Local only, never synced -
+   it's what keys each person's "my team" pick so two people sharing the
+   same cloud sync don't overwrite each other's team selection. */
+function getProfile() { return DB.get("profile", null); }
+function setProfile(name) { DB.set("profile", name); }
+
+/* Raw stored pick for the current profile on a league: a roster id,
+   the sentinel "NONE" (explicitly not my league), or null (undecided). */
+function rawTeamPick(league) {
+  const profile = getProfile();
+  if (!profile) return null;
+  if (league.teams && league.teams[profile] !== undefined) return league.teams[profile];
+  if (league.myRosterId && !league.teams) return league.myRosterId; // legacy single-owner data
+  return null;
+}
+function myTeamFor(league) {
+  const raw = rawTeamPick(league);
+  return raw && raw !== "NONE" ? raw : null;
+}
+function isDismissedByMe(league) {
+  return rawTeamPick(league) === "NONE";
+}
+
+/* =========================================================
+   CLOUD SYNC (Supabase) - syncs only the saved-league list
+   (id + nickname) across devices. Roster/standings/player data
+   always comes fresh from Sleeper on whatever device you're on.
+========================================================= */
+async function cloudFetch(path, options) {
+  const cfg = getCloudConfig();
+  if (!cfg) throw new Error("Cloud sync isn't connected.");
+  const res = await fetch(`${cfg.url}/rest/v1/${path}`, Object.assign({}, options, {
+    headers: Object.assign({
+      apikey: cfg.key,
+      Authorization: `Bearer ${cfg.key}`,
+      "Content-Type": "application/json",
+      "x-app-passphrase": cfg.passphrase || "",
+    }, (options && options.headers) || {})
+  }));
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    const authHint = res.status === 401 || res.status === 403 ? " Check that the passphrase matches on both devices." : "";
+    throw new Error("Cloud sync error (" + res.status + "):" + authHint + " " + text.slice(0, 140));
+  }
+  return res.status === 204 ? null : res.json();
+}
+async function cloudPullLeagues() {
+  const rows = await cloudFetch("leagues?select=*");
+  return (rows || []).map(r => ({
+    id: r.id, nickname: r.nickname, addedAt: r.added_at, teams: r.teams || {},
+    source: r.source || "sleeper", manualData: r.manual_data || null,
+    waiverSchedule: r.waiver_schedule || "",
+    waiverDaily: !!r.waiver_daily, waiverDays: r.waiver_days || [], waiverTime: r.waiver_time || ""
+  }));
+}
+async function cloudUpsertLeague(l) {
+  const body = {
+    id: l.id, nickname: l.nickname, added_at: l.addedAt || Date.now(),
+    teams: l.teams || {}, source: l.source || "sleeper",
+    waiver_schedule: l.waiverSchedule || "",
+    waiver_daily: !!l.waiverDaily, waiver_days: l.waiverDays || [], waiver_time: l.waiverTime || ""
+  };
+  if (l.source === "manual") {
+    body.manual_data = getLeagueData(l.id) || null; // manual leagues have no other source to re-sync from
+  }
+  await cloudFetch("leagues?on_conflict=id", {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates" },
+    body: JSON.stringify([body])
+  });
+}
+async function cloudDeleteLeague(id) {
+  await cloudFetch(`leagues?id=eq.${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+/* =========================================================
+   SLEEPER API
+========================================================= */
+let NFL_STATE = null;
+async function ensureNflState() {
+  if (NFL_STATE) return NFL_STATE;
+  NFL_STATE = await fetchJSON(`${SLEEPER}/state/nfl`);
+  return NFL_STATE;
+}
+const SLEEPER = "https://api.sleeper.app/v1";
+
+async function fetchJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Sleeper API error (" + res.status + ")");
+  return res.json();
+}
+
+async function syncLeagueData(leagueId) {
+  const [league, rosters, users] = await Promise.all([
+    fetchJSON(`${SLEEPER}/league/${leagueId}`),
+    fetchJSON(`${SLEEPER}/league/${leagueId}/rosters`),
+    fetchJSON(`${SLEEPER}/league/${leagueId}/users`),
+  ]);
+  if (!league) throw new Error("No league found for that ID.");
+  const data = { league, rosters: rosters || [], users: users || [], syncedAt: Date.now() };
+  saveLeagueData(leagueId, data);
+  return data;
+}
+
+const PLAYERS_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+async function ensurePlayers(force) {
+  const cached = getPlayersCache();
+  if (cached && !force && (Date.now() - cached.updatedAt) < PLAYERS_MAX_AGE_MS) {
+    return cached.map;
+  }
+  const data = await fetchJSON(`${SLEEPER}/players/nfl`);
+  const trimmed = {};
+  for (const id in data) {
+    const p = data[id];
+    trimmed[id] = {
+      first_name: p.first_name, last_name: p.last_name,
+      position: p.position, fantasy_positions: p.fantasy_positions,
+      team: p.team, status: p.status, injury_status: p.injury_status
+    };
+  }
+  const payload = { updatedAt: Date.now(), map: trimmed };
+  const ok = savePlayersCache(payload);
+  if (!ok && cached) return cached.map; // storage full - fall back to whatever we had
+  return trimmed;
+}
+
+/* =========================================================
+   DOMAIN HELPERS
+========================================================= */
+const POS_COLOR = {
+  QB: "#6b8fc4", RB: "#6fae6f", WR: "#b06fae", TE: "#c98f4a", K: "#7d8a94", DEF: "#7d8a94",
+  DL: "#c1503f", "DL-EDGE": "#c1503f", "DL-DT": "#8f3a2e",
+  LB: "#d7a53e",
+  DB: "#3f9ba8", "DB-CB": "#3f9ba8", "DB-S": "#2c6e78", "DB-NB": "#5fc2cf",
+};
+
+function subType(p) {
+  if (!p) return null;
+  const fp = (p.fantasy_positions && p.fantasy_positions[0]) || p.position;
+  const pos = (p.position || "").toUpperCase();
+  if (fp === "DL") {
+    if (pos === "DE" || pos === "EDGE") return "EDGE";
+    if (pos === "DT" || pos === "NT") return "DT";
+    return null;
+  }
+  if (fp === "DB") {
+    if (pos === "CB") return "CB";
+    if (["S","SS","FS"].includes(pos)) return "S";
+    if (["NB","NCB"].includes(pos)) return "NB";
+    return null;
+  }
+  return null;
+}
+function badgeInfo(p) {
+  const fp = (p && (p.fantasy_positions?.[0] || p.position)) || "?";
+  const st = subType(p);
+  const key = st ? `${fp}-${st}` : fp;
+  return { label: st || fp, color: POS_COLOR[key] || POS_COLOR[fp] || "#5f7568" };
+}
+function playerName(p, id) {
+  if (!p) return id;
+  return (`${p.first_name || ""} ${p.last_name || ""}`).trim() || id;
+}
+function teamLabel(roster, users) {
+  const owner = users.find(u => u.user_id === roster.owner_id);
+  const metaName = owner?.metadata?.team_name;
+  if (metaName && metaName.trim()) return metaName.trim();
+  if (owner?.display_name) return owner.display_name;
+  return `Roster ${roster.roster_id}`;
+}
+function computeStandings(rosters, users) {
+  const rows = rosters.map(r => {
+    const s = r.settings || {};
+    const pf = (s.fpts || 0) + (s.fpts_decimal || 0) / 100;
+    const pa = (s.fpts_against || 0) + (s.fpts_against_decimal || 0) / 100;
+    return { rosterId: r.roster_id, name: teamLabel(r, users), wins: s.wins||0, losses: s.losses||0, ties: s.ties||0, pf, pa, raw: r };
+  });
+  rows.sort((a,b) => b.wins !== a.wins ? b.wins - a.wins : b.pf - a.pf);
+  return rows;
+}
+function starterSlots(league) {
+  if (!league?.roster_positions) return [];
+  return league.roster_positions.filter(p => !["BN","IR","TAXI"].includes(p));
+}
+function fmtTime(ts) {
+  if (!ts) return "never";
+  const d = new Date(ts);
+  return d.toLocaleDateString([], {month:"short", day:"numeric"}) + " " + d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+}
+
+/* =========================================================
+   WAIVER SCHEDULE
+   Sleeper's daily_waivers_hour is confirmed (empirically, against
+   a real league) to be an hour-of-day in US Pacific Time. This
+   converts it to a local HH:MM for pre-filling the time picker.
+   Only the "is this league daily" detection is Sleeper-verified -
+   the specific weekday for non-daily leagues isn't, so that part
+   always starts blank for the user to set.
+========================================================= */
+const WAIVER_DAY_LABELS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+function pacificHourToLocalTimeString(hour) {
+  const now = new Date();
+  const fmtPT = new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", hour12: false, year: "numeric", month: "2-digit", day: "2-digit" });
+  const parts = fmtPT.formatToParts(now);
+  const get = t => parts.find(p => p.type === t).value;
+  let guessUTC = new Date(Date.UTC(+get("year"), +get("month") - 1, +get("day"), hour, 0, 0));
+  const fmtCheck = new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", hour12: false, hour: "2-digit" });
+  let observed = parseInt(fmtCheck.format(guessUTC), 10) % 24;
+  let delta = hour - observed;
+  if (delta > 12) delta -= 24;
+  if (delta < -12) delta += 24;
+  guessUTC = new Date(guessUTC.getTime() + delta * 3600 * 1000);
+  return String(guessUTC.getHours()).padStart(2, "0") + ":" + String(guessUTC.getMinutes()).padStart(2, "0");
+}
+
+function suggestWaiverScheduleFromSleeper(league) {
+  const s = league && league.settings;
+  if (!s) return null;
+  if (s.daily_waivers === 1) {
+    const time = typeof s.daily_waivers_hour === "number" ? pacificHourToLocalTimeString(s.daily_waivers_hour) : null;
+    return { daily: true, days: [0,1,2,3,4,5,6], time };
+  }
+  return null; // non-daily day-of-week mapping isn't verified yet - leave for manual entry
+}
+
+function nextWaiverRun(l) {
+  if (!l.waiverDays || !l.waiverDays.length || !l.waiverTime) return null;
+  const [hh, mm] = l.waiverTime.split(":").map(Number);
+  if (isNaN(hh) || isNaN(mm)) return null;
+  const now = new Date();
+  for (let addDays = 0; addDays <= 7; addDays++) {
+    const candidate = new Date(now);
+    candidate.setDate(now.getDate() + addDays);
+    candidate.setHours(hh, mm, 0, 0);
+    if (candidate < now) continue;
+    if (l.waiverDays.includes(candidate.getDay())) return candidate;
+  }
+  return null;
+}
+
+function fmtNextRun(d) {
+  if (!d) return null;
+  const now = new Date();
+  const isToday = d.toDateString() === now.toDateString();
+  const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1);
+  const isTomorrow = d.toDateString() === tomorrow.toDateString();
+  const timeStr = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (isToday) return "Today " + timeStr;
+  if (isTomorrow) return "Tomorrow " + timeStr;
+  return d.toLocaleDateString([], { weekday: "short" }) + " " + timeStr;
+}
+
+const POS_GROUPS = ["QB","RB","WR","TE","DL","LB","DB","K","DEF"];
+
+/* =========================================================
+   APP STATE + ROUTER
+========================================================= */
+let PLAYERS = getPlayersCache()?.map || null;
+let STATE = {
+  route: "dashboard",
+  leagueId: null,
+  tab: "standings",
+  rosterFilter: "",
+  compareA: { leagueId: null, rosterId: null },
+  compareB: { leagueId: null, rosterId: null },
+  loading: false,
+  error: null,
+  matchupWeek: null,
+  matchupsCache: {},
+  matchupsMyOnly: true,
+  matchupDetailLeagueId: null,
+  matchupDetailWeek: null,
+  matchupDetailPair: null,
+  matchupPlayerPoints: {},
+  nflSchedule: null,
+  matchupDetailScoring: null,
+  waiverTargetsLeagueId: null,
+  waiverTargetsData: null,
+  dashboardWeek: null,
+  trending: null,
+  trendingType: "add",
+  transactions: null,
+  transactionsShown: 30,
+  transactionsWide: false,
+  transactionsLeagueFilter: "all",
+  transactionsTypeFilter: "all",
+  exposureFilter: "",
+  finderQuery: "",
+  draftsByLeague: {},
+  picksByDraft: {},
+  draftsLoaded: false,
+  selectedLeagueId: null,
+  selectedDraftId: null,
+  showFinderPoints: false,
+  playerSeasonStats: {},
+  rankingsLeagueId: null,
+  rankingsPosition: "QB",
+  rankingsData: {},
+};
+let draftPollInterval = null;
+
+function setState(patch) { Object.assign(STATE, patch); render(); }
+function navigate(route, extra) {
+  if (route !== "draft" && draftPollInterval) { clearInterval(draftPollInterval); draftPollInterval = null; }
+  setState(Object.assign({ route, error: null }, extra || {}));
+}
+
+function el(html) {
+  const t = document.createElement("template");
+  t.innerHTML = html.trim();
+  return t.content;
+}
+
+async function withLoading(fn) {
+  setState({ loading: true, error: null });
+  try { await fn(); }
+  catch (e) { setState({ loading: false, error: e.message || "Something went wrong." }); return; }
+  setState({ loading: false });
+}
+
+/* -------- actions exposed to inline handlers -------- */
+window.onAddLeagueSourceChange = function (source) {
+  const input = document.getElementById("add-league-input");
+  if (!input) return;
+  input.placeholder = source === "manual" ? 'League name (e.g. "ESPN Redraft")' : "Paste a Sleeper league ID...";
+};
+
+window.addLeague = async function () {
+  const input = document.getElementById("add-league-input");
+  const sourceSelect = document.getElementById("add-league-source");
+  const source = (sourceSelect && sourceSelect.value) || "sleeper";
+  const value = (input.value || "").trim();
+  if (!value) return;
+
+  if (source === "manual") {
+    await withLoading(async () => {
+      const id = "manual-" + Date.now().toString(36);
+      const leagueData = {
+        league: { name: value, season: String(new Date().getFullYear()), roster_positions: [] },
+        rosters: [], users: [], syncedAt: Date.now()
+      };
+      saveLeagueData(id, leagueData);
+      const leagues = getLeagues();
+      const entry = { id, nickname: value, addedAt: Date.now(), source: "manual" };
+      leagues.push(entry);
+      saveLeagues(leagues);
+      if (getCloudConfig()) {
+        try { await cloudUpsertLeague(entry); } catch (e) { console.error("Cloud push failed", e); }
+      }
+      input.value = "";
+      navigate("league", { leagueId: id, tab: "standings" });
+    });
+    return;
+  }
+
+  if (source !== "sleeper") {
+    setState({ error: "That source isn't wired up yet - only Sleeper and Manual work right now." });
+    return;
+  }
+
+  const id = value;
+  await withLoading(async () => {
+    const data = await syncLeagueData(id);
+    if (!PLAYERS) PLAYERS = await ensurePlayers(false);
+    const leagues = getLeagues();
+    let entry = leagues.find(l => l.id === id);
+    if (!entry) {
+      entry = { id, nickname: data.league.name || id, addedAt: Date.now(), source };
+      leagues.push(entry);
+      saveLeagues(leagues);
+    }
+    if (getCloudConfig()) {
+      try { await cloudUpsertLeague(entry); } catch (e) { console.error("Cloud push failed", e); }
+    }
+    input.value = "";
+    navigate("league", { leagueId: id, tab: "standings" });
+  });
+};
+
+window.syncOne = async function (id) {
+  await withLoading(async () => { await syncLeagueData(id); });
+};
+
+/* -------- manual league team editing -------- */
+async function pushManualLeagueUpdate(leagueId) {
+  if (!getCloudConfig()) return;
+  const leagues = getLeagues();
+  const entry = leagues.find(l => l.id === leagueId);
+  if (!entry) return;
+  try { await cloudUpsertLeague(entry); } catch (e) { console.error("Cloud push failed", e); }
+}
+
+window.addManualTeam = async function (leagueId) {
+  const data = getLeagueData(leagueId);
+  if (!data) return;
+  const nextId = data.rosters.reduce((max, r) => Math.max(max, r.roster_id || 0), 0) + 1;
+  const userId = "u" + nextId;
+  data.rosters.push({
+    roster_id: nextId, owner_id: userId, players: [], starters: [],
+    settings: { wins: 0, losses: 0, ties: 0, fpts: 0, fpts_decimal: 0, fpts_against: 0, fpts_against_decimal: 0 }
+  });
+  data.users.push({ user_id: userId, display_name: "New Team" });
+  data.syncedAt = Date.now();
+  saveLeagueData(leagueId, data);
+  await pushManualLeagueUpdate(leagueId);
+  render();
+};
+
+window.updateManualTeam = async function (leagueId, rosterId, field, value) {
+  const data = getLeagueData(leagueId);
+  if (!data) return;
+  const roster = data.rosters.find(r => String(r.roster_id) === String(rosterId));
+  if (!roster) return;
+  const user = data.users.find(u => u.user_id === roster.owner_id);
+  if (field === "name") {
+    if (user) user.display_name = value;
+  } else if (field === "wins" || field === "losses" || field === "ties") {
+    roster.settings[field] = parseInt(value, 10) || 0;
+  } else if (field === "pf") {
+    const n = parseFloat(value) || 0;
+    roster.settings.fpts = Math.floor(n);
+    roster.settings.fpts_decimal = Math.round((n % 1) * 100);
+  } else if (field === "pa") {
+    const n = parseFloat(value) || 0;
+    roster.settings.fpts_against = Math.floor(n);
+    roster.settings.fpts_against_decimal = Math.round((n % 1) * 100);
+  }
+  data.syncedAt = Date.now();
+  saveLeagueData(leagueId, data);
+  await pushManualLeagueUpdate(leagueId);
+};
+
+window.removeManualTeam = async function (leagueId, rosterId) {
+  const data = getLeagueData(leagueId);
+  if (!data) return;
+  const roster = data.rosters.find(r => String(r.roster_id) === String(rosterId));
+  data.rosters = data.rosters.filter(r => String(r.roster_id) !== String(rosterId));
+  if (roster) data.users = data.users.filter(u => u.user_id !== roster.owner_id);
+  data.syncedAt = Date.now();
+  saveLeagueData(leagueId, data);
+  await pushManualLeagueUpdate(leagueId);
+  render();
+};
+
+function renderManualTeamsEditor(leagueId, data) {
+  const rows = data.rosters.map(r => {
+    const user = data.users.find(u => u.user_id === r.owner_id);
+    const pf = ((r.settings.fpts || 0) + (r.settings.fpts_decimal || 0) / 100).toFixed(2);
+    const pa = ((r.settings.fpts_against || 0) + (r.settings.fpts_against_decimal || 0) / 100).toFixed(2);
+    return `
+      <div class="row" style="gap:6px; padding:6px 0; border-top:1px solid var(--line); flex-wrap:wrap;">
+        <input type="text" value="${escapeHtml(user?.display_name || "")}" placeholder="Team name" style="flex:2; min-width:120px; font-size:12px;"
+          onchange="updateManualTeam('${leagueId}','${r.roster_id}','name',this.value)" />
+        <input type="number" value="${r.settings.wins||0}" placeholder="W" style="width:52px; font-size:12px;"
+          onchange="updateManualTeam('${leagueId}','${r.roster_id}','wins',this.value)" />
+        <input type="number" value="${r.settings.losses||0}" placeholder="L" style="width:52px; font-size:12px;"
+          onchange="updateManualTeam('${leagueId}','${r.roster_id}','losses',this.value)" />
+        <input type="number" value="${r.settings.ties||0}" placeholder="T" style="width:52px; font-size:12px;"
+          onchange="updateManualTeam('${leagueId}','${r.roster_id}','ties',this.value)" />
+        <input type="number" step="0.01" value="${pf}" placeholder="PF" style="width:72px; font-size:12px;"
+          onchange="updateManualTeam('${leagueId}','${r.roster_id}','pf',this.value)" />
+        <input type="number" step="0.01" value="${pa}" placeholder="PA" style="width:72px; font-size:12px;"
+          onchange="updateManualTeam('${leagueId}','${r.roster_id}','pa',this.value)" />
+        <button class="btn btn-sm btn-danger" onclick="removeManualTeam('${leagueId}','${r.roster_id}')">Remove</button>
+      </div>`;
+  }).join("");
+
+  return `
+    <div class="panel" style="padding:14px; margin-top:16px;">
+      <div class="row" style="justify-content:space-between;">
+        <span style="font-size:13px; font-weight:700;">Manual teams</span>
+        <button class="btn btn-sm btn-primary" onclick="addManualTeam('${leagueId}')">+ Add team</button>
+      </div>
+      <div class="muted" style="font-size:11px; margin-top:4px;">
+        Enter records and points by hand. Rosters aren't tracked for manual leagues, so Needs/Exposure/Player Finder won't include this league.
+      </div>
+      ${rows || '<div class="muted" style="font-size:12px; margin-top:10px;">No teams yet - add one above.</div>'}
+    </div>
+  `;
+}
+
+window.syncAll = async function () {
+  await withLoading(async () => {
+    const leagues = getLeagues().filter(l => l.source !== "manual");
+    for (const l of leagues) {
+      try { await syncLeagueData(l.id); } catch (e) { console.error("Sync failed for " + l.id, e); }
+    }
+    PLAYERS = await ensurePlayers(false);
+  });
+};
+
+window.refreshPlayers = async function () {
+  await withLoading(async () => { PLAYERS = await ensurePlayers(true); });
+};
+
+window.removeLeague = async function (id) {
+  if (!confirm("Remove this league from League Manager? Local data for it will be deleted.")) return;
+  const leagues = getLeagues().filter(l => l.id !== id);
+  saveLeagues(leagues);
+  removeLeagueData(id);
+  if (getCloudConfig()) {
+    try { await cloudDeleteLeague(id); } catch (e) { console.error("Cloud delete failed", e); }
+  }
+  navigate("dashboard");
+};
+
+window.renameLeague = async function (id) {
+  const leagues = getLeagues();
+  const l = leagues.find(x => x.id === id);
+  if (!l) return;
+  const name = prompt("Nickname for this league:", l.nickname);
+  if (name === null) return;
+  l.nickname = name.trim() || l.nickname;
+  saveLeagues(leagues);
+  if (getCloudConfig()) {
+    try { await cloudUpsertLeague(l); } catch (e) { console.error("Cloud push failed", e); }
+  }
+  render();
+};
+
+/* -------- cloud sync connect/disconnect -------- */
+function preferNonEmpty(cloudVal, localVal) {
+  if (cloudVal === undefined || cloudVal === null || cloudVal === "") return localVal;
+  if (Array.isArray(cloudVal) && cloudVal.length === 0) return localVal;
+  return cloudVal;
+}
+
+async function mergeWithCloud() {
+  const cloudLeagues = await cloudPullLeagues();
+  const local = getLeagues();
+  const merged = local.slice();
+  cloudLeagues.forEach(cl => {
+    const idx = merged.findIndex(l => l.id === cl.id);
+    if (idx === -1) {
+      merged.push(cl);
+    } else {
+      const localL = merged[idx];
+      const localTeams = localL.teams || {};
+      const cloudTeams = cl.teams || {};
+      // Prefer non-empty values rather than blindly overwriting with the cloud
+      // copy - a background sync landing right after a local edit shouldn't be
+      // able to silently erase it just because the cloud hadn't caught up yet.
+      merged[idx] = Object.assign({}, cl, {
+        teams: Object.assign({}, localTeams, cloudTeams),
+        nickname: preferNonEmpty(cl.nickname, localL.nickname),
+        waiverSchedule: preferNonEmpty(cl.waiverSchedule, localL.waiverSchedule),
+        waiverDaily: cl.waiverDaily !== undefined ? cl.waiverDaily : localL.waiverDaily,
+        waiverDays: preferNonEmpty(cl.waiverDays, localL.waiverDays),
+        waiverTime: preferNonEmpty(cl.waiverTime, localL.waiverTime),
+      });
+    }
+    // manual leagues have no API to re-sync from, so the cloud copy of their
+    // standings IS the source of truth - write it into local league data.
+    if (cl.source === "manual" && cl.manualData) {
+      saveLeagueData(cl.id, cl.manualData);
+    }
+  });
+  saveLeagues(merged);
+  // anything local that the cloud doesn't know about yet gets pushed up,
+  // so a thin/empty cloud table never causes local leagues to vanish.
+  const cloudIds = new Set(cloudLeagues.map(l => l.id));
+  for (const l of merged) {
+    if (!cloudIds.has(l.id)) {
+      try { await cloudUpsertLeague(l); } catch (e) { console.error("Cloud push failed", e); }
+    }
+  }
+}
+
+window.connectCloud = async function () {
+  const urlInput = document.getElementById("cloud-url-input");
+  const keyInput = document.getElementById("cloud-key-input");
+  const passInput = document.getElementById("cloud-pass-input");
+  const url = (urlInput.value || "").trim().replace(/\/+$/, "");
+  const key = (keyInput.value || "").trim();
+  const passphrase = (passInput.value || "").trim();
+  if (!url || !key || !passphrase) {
+    setState({ error: "URL, key, and passphrase are all required." });
+    return;
+  }
+  await withLoading(async () => {
+    saveCloudConfig({ url, key, passphrase });
+    await mergeWithCloud();
+  });
+};
+
+window.disconnectCloud = function () {
+  if (!confirm("Disconnect cloud sync? Leagues already saved on this device stay put - this just stops syncing.")) return;
+  clearCloudConfig();
+  render();
+};
+
+window.pullCloudNow = async function () {
+  await withLoading(async () => { await mergeWithCloud(); });
+};
+
+window.openLeague = function (id) { navigate("league", { leagueId: id, tab: "standings" }); };
+window.setTab = function (tab) { setState({ tab }); };
+window.setRosterFilter = function (v) { STATE.rosterFilter = v; renderRosterGridOnly(); };
+
+let searchDebounce = null;
+window.onFinderInput = function (v) {
+  STATE.finderQuery = v;
+  clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(async () => {
+    if (STATE.showFinderPoints) await loadFinderPointsForCurrentResults();
+    const results = document.getElementById("finder-results");
+    if (results) results.innerHTML = finderResultsHtml();
+  }, 150);
+};
+
+window.onCompareChange = function (side, field, value) {
+  STATE[side === "a" ? "compareA" : "compareB"][field] = value || null;
+  if (field === "leagueId") STATE[side === "a" ? "compareA" : "compareB"].rosterId = null;
+  render();
+};
+
+/* -------- my team designation (per profile) -------- */
+window.changeProfile = function () {
+  const current = getProfile() || "";
+  const name = prompt("Which profile is this device? (e.g. your name)", current);
+  if (name === null) return;
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  setProfile(trimmed);
+  render();
+};
+
+window.setMyTeam = async function (leagueId, rosterId) {
+  let profile = getProfile();
+  if (!profile) {
+    window.changeProfile();
+    profile = getProfile();
+    if (!profile) return; // they cancelled - nothing to attribute the pick to
+  }
+  const leagues = getLeagues();
+  const l = leagues.find(x => x.id === leagueId);
+  if (!l) return;
+  if (!l.teams) l.teams = {};
+  if (rosterId) l.teams[profile] = rosterId; else delete l.teams[profile];
+  saveLeagues(leagues);
+  if (getCloudConfig()) {
+    try { await cloudUpsertLeague(l); } catch (e) { console.error("Cloud push failed", e); }
+  }
+  render();
+};
+
+/* -------- matchups -------- */
+window.loadMatchups = async function (week) {
+  await withLoading(async () => {
+    if (!week) {
+      const state = await ensureNflState();
+      week = (state.season_type === "pre" || !state.week) ? 1 : state.week;
+    }
+    const leagues = getLeagues().filter(l => l.source !== "manual");
+    const cache = {};
+    for (const l of leagues) {
+      try { cache[l.id] = await fetchJSON(`${SLEEPER}/league/${l.id}/matchups/${week}`) || []; }
+      catch (e) { cache[l.id] = []; }
+    }
+    STATE.matchupWeek = week;
+    STATE.matchupsCache = cache;
+  });
+};
+window.goMatchups = function () {
+  navigate("matchups");
+  if (STATE.matchupWeek === null) loadMatchups();
+};
+window.setMatchupsMyOnly = function (v) {
+  STATE.matchupsMyOnly = v;
+  render();
+};
+
+/* -------- matchup detail (boxscore, beta per-player points) -------- */
+window.viewMatchupDetail = async function (leagueId, week, matchupId) {
+  await withLoading(async () => {
+    if (!PLAYERS) PLAYERS = await ensurePlayers(false);
+    STATE.matchupDetailLeagueId = leagueId;
+    STATE.matchupDetailWeek = week;
+
+    let matchups = (STATE.matchupsCache && STATE.matchupsCache[leagueId]) || [];
+    if (!matchups.length) {
+      try { matchups = await fetchJSON(`${SLEEPER}/league/${leagueId}/matchups/${week}`) || []; STATE.matchupsCache[leagueId] = matchups; }
+      catch (e) { matchups = []; }
+    }
+    const pair = matchups.filter(m => m.matchup_id === matchupId);
+    STATE.matchupDetailPair = pair;
+
+    if (!STATE.nflSchedule) {
+      try {
+        const res = await fetch(`https://api.sleeper.app/schedule/nfl/regular/2025`);
+        STATE.nflSchedule = res.ok ? await res.json() : [];
+      } catch (e) {
+        STATE.nflSchedule = [];
+      }
+    }
+
+    // Fetch actual/projected points for every rostered player - starters, bench, and IR
+    const ids = new Set();
+    pair.forEach(side => (side.players || []).forEach(id => { if (id && id !== "0") ids.add(id); }));
+    STATE.matchupPlayerPoints = STATE.matchupPlayerPoints || {};
+    for (const id of ids) {
+      const key = `${id}-${week}`;
+      if (STATE.matchupPlayerPoints[key] !== undefined) continue;
+      try {
+        const [statRes, projRes] = await Promise.all([
+          fetch(`https://api.sleeper.com/stats/nfl/player/${id}?season_type=regular&season=2025&week=${week}`),
+          fetch(`https://api.sleeper.com/projections/nfl/player/${id}?season_type=regular&season=2025&week=${week}`)
+        ]);
+        STATE.matchupPlayerPoints[key] = {
+          stat: statRes.ok ? await statRes.json() : null,
+          proj: projRes.ok ? await projRes.json() : null
+        };
+      } catch (e) {
+        STATE.matchupPlayerPoints[key] = null;
+      }
+    }
+  });
+  navigate("matchupdetail");
+};
+
+/* -------- trending -------- */
+window.loadTrending = async function (type) {
+  type = type || STATE.trendingType || "add";
+  await withLoading(async () => {
+    if (!PLAYERS) PLAYERS = await ensurePlayers(false);
+    const rows = await fetchJSON(`${SLEEPER}/players/nfl/trending/${type}?lookback_hours=24&limit=25`);
+    STATE.trendingType = type;
+    STATE.trending = rows || [];
+  });
+};
+window.goTrending = function () {
+  navigate("trending");
+  if (!STATE.trending) loadTrending();
+};
+
+/* -------- transactions -------- */
+window.loadTransactions = async function (wide) {
+  await withLoading(async () => {
+    if (!PLAYERS) PLAYERS = await ensurePlayers(false);
+    const state = await ensureNflState();
+    const currentWeek = state.week || 1;
+    let roundsToCheck;
+    let cutoffDays;
+    if (wide) {
+      // diagnostic fallback: check every round from preseason through now, 60-day window
+      roundsToCheck = new Set(Array.from({ length: currentWeek + 1 }, (_, i) => i));
+      cutoffDays = 60;
+    } else {
+      // round 0 covers preseason/pre-lock moves - only worth checking near the
+      // start of the season, since anything from back then is stale by now anyway.
+      roundsToCheck = new Set([currentWeek, Math.max(0, currentWeek - 1)]);
+      if (currentWeek <= 2) roundsToCheck.add(0);
+      cutoffDays = 14;
+    }
+
+    const leagues = getLeagues().filter(l => !isDismissedByMe(l) && l.source !== "manual");
+    let all = [];
+    for (const l of leagues) {
+      const data = getLeagueData(l.id);
+      if (!data) continue;
+      for (const w of roundsToCheck) {
+        try {
+          const rows = await fetchJSON(`${SLEEPER}/league/${l.id}/transactions/${w}`);
+          (rows || []).forEach(t => all.push(Object.assign({}, t, {
+            leagueId: l.id, leagueName: l.nickname, leagueUsers: data.users, leagueRosters: data.rosters
+          })));
+        } catch (e) { /* skip that week */ }
+      }
+    }
+    const cutoff = Date.now() - cutoffDays * 24 * 60 * 60 * 1000;
+    all = all.filter(t => !t.created || t.created >= cutoff);
+    all.sort((a, b) => (b.created || 0) - (a.created || 0));
+    STATE.transactions = all;
+    STATE.transactionsShown = 30;
+    STATE.transactionsWide = !!wide;
+  });
+};
+window.goTransactions = function () {
+  navigate("transactions");
+  if (!STATE.transactions) loadTransactions();
+};
+
+/* -------- live draft -------- */
+window.loadDrafts = async function () {
+  await withLoading(async () => {
+    if (!PLAYERS) PLAYERS = await ensurePlayers(false);
+    const leagues = getLeagues().filter(l => l.source !== "manual");
+    const draftsByLeague = {};
+    for (const l of leagues) {
+      try { draftsByLeague[l.id] = await fetchJSON(`${SLEEPER}/league/${l.id}/drafts`) || []; }
+      catch (e) { draftsByLeague[l.id] = []; }
+    }
+    const picksByDraft = {};
+    for (const id in draftsByLeague) {
+      for (let i = 0; i < draftsByLeague[id].length; i++) {
+        const d = draftsByLeague[id][i];
+        if (d.status === "drafting") {
+          try { picksByDraft[d.draft_id] = await fetchJSON(`${SLEEPER}/draft/${d.draft_id}/picks`) || []; }
+          catch (e) { picksByDraft[d.draft_id] = []; }
+          // the league drafts-list endpoint doesn't reliably include slot_to_roster_id -
+          // fetch the single-draft endpoint for live drafts to guarantee we have it.
+          try {
+            const full = await fetchJSON(`${SLEEPER}/draft/${d.draft_id}`);
+            if (full) draftsByLeague[id][i] = full;
+          } catch (e) { /* keep the summary version */ }
+        }
+      }
+    }
+    STATE.draftsByLeague = draftsByLeague;
+    STATE.picksByDraft = picksByDraft;
+    STATE.draftsLoaded = true;
+  });
+};
+window.goDraft = function () {
+  navigate("draft");
+  loadDrafts();
+  if (draftPollInterval) clearInterval(draftPollInterval);
+  draftPollInterval = setInterval(() => {
+    if (STATE.route === "draft") loadDrafts();
+  }, 15000);
+};
+
+function draftStatusLabel(status) {
+  if (status === "drafting") return "Live";
+  if (status === "pre_draft") return "Scheduled";
+  if (status === "complete") return "Complete";
+  return status || "Unknown";
+}
+function fmtDraftTime(ts) {
+  if (!ts) return "Not scheduled";
+  const d = new Date(ts);
+  return d.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) + " " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+window.viewDraftBoard = async function (leagueId, draftId) {
+  if (draftPollInterval) { clearInterval(draftPollInterval); draftPollInterval = null; }
+  await withLoading(async () => {
+    if (!PLAYERS) PLAYERS = await ensurePlayers(false);
+    const full = await fetchJSON(`${SLEEPER}/draft/${draftId}`);
+    const picks = await fetchJSON(`${SLEEPER}/draft/${draftId}/picks`) || [];
+    STATE.draftsByLeague[leagueId] = STATE.draftsByLeague[leagueId] || [];
+    const idx = STATE.draftsByLeague[leagueId].findIndex(d => d.draft_id === draftId);
+    if (idx >= 0) STATE.draftsByLeague[leagueId][idx] = full; else STATE.draftsByLeague[leagueId].push(full);
+    STATE.picksByDraft[draftId] = picks;
+    STATE.selectedLeagueId = leagueId;
+    STATE.selectedDraftId = draftId;
+  });
+  navigate("draftboard");
+};
+
+/* =========================================================
+   RENDER: SHELL
+========================================================= */
+function render() {
+  const app = document.getElementById("app");
+  app.innerHTML = "";
+  app.appendChild(renderHeader());
+  app.appendChild(el(`<div class="yardline"></div>`));
+  if (STATE.error) app.appendChild(el(`<div class="banner-error"><strong>Error:</strong> ${escapeHtml(STATE.error)}</div>`));
+
+  let body;
+  if (STATE.route === "dashboard") body = renderDashboard();
+  else if (STATE.route === "sync") body = renderSync();
+  else if (STATE.route === "league") body = renderLeagueDetail();
+  else if (STATE.route === "finder") body = renderFinder();
+  else if (STATE.route === "compare") body = renderCompare();
+  else if (STATE.route === "matchups") body = renderMatchups();
+  else if (STATE.route === "matchupdetail") body = renderMatchupDetail();
+  else if (STATE.route === "trending") body = renderTrending();
+  else if (STATE.route === "transactions") body = renderTransactions();
+  else if (STATE.route === "draft") body = renderDraftTab();
+  else if (STATE.route === "draftboard") body = renderDraftBoard();
+  else if (STATE.route === "rankings") body = renderRankings();
+  else if (STATE.route === "exposure") body = renderExposure();
+  else if (STATE.route === "waivertargets") body = renderWaiverTargets();
+  else body = renderDashboard();
+
+  app.appendChild(body);
+}
+
+function renderHeader() {
+  const leagues = getLeagues();
+  const profile = getProfile();
+  return el(`
+    <div>
+      <div class="topbar">
+        <div>
+          <div class="brand-eyebrow">DYNASTY</div>
+          <h1 class="brand-title">Fantasy Football League Manager</h1>
+        </div>
+        <div class="row">
+          <button class="btn btn-sm" onclick="changeProfile()">${profile ? "Viewing as " + escapeHtml(profile) : "Set your name"}</button>
+          ${leagues.length > 0 ? `<button class="btn btn-sm" onclick="syncAll()" ${STATE.loading?"disabled":""}>${STATE.loading ? '<span class="spinner"></span>' : ''} Sync all</button>` : ""}
+        </div>
+      </div>
+      <div class="nav">
+        <button class="nav-btn ${STATE.route==='dashboard'?'active':''}" onclick="navigate('dashboard')">Dashboard</button>
+        <button class="nav-btn ${STATE.route==='sync'?'active':''}" onclick="navigate('sync')">Sync Leagues</button>
+        <button class="nav-btn ${STATE.route==='matchups'?'active':''}" onclick="goMatchups()">Matchups</button>
+        <button class="nav-btn ${STATE.route==='transactions'?'active':''}" onclick="goTransactions()">Transactions</button>
+        <button class="nav-btn ${STATE.route==='draft'?'active':''}" onclick="goDraft()">Live Draft</button>
+        <button class="nav-btn ${STATE.route==='rankings'?'active':''}" onclick="navigate('rankings')">Rankings</button>
+        <button class="nav-btn ${STATE.route==='trending'?'active':''}" onclick="goTrending()">Trending</button>
+        <button class="nav-btn ${STATE.route==='exposure'?'active':''}" onclick="navigate('exposure')">Exposure</button>
+        <button class="nav-btn ${STATE.route==='waivertargets'?'active':''}" onclick="navigate('waivertargets')">Waiver Targets</button>
+        <button class="nav-btn ${STATE.route==='finder'?'active':''}" onclick="navigate('finder')">Player Finder</button>
+        <button class="nav-btn ${STATE.route==='compare'?'active':''}" onclick="navigate('compare')">Compare Rosters</button>
+      </div>
+    </div>
+  `);
+}
+
+/* =========================================================
+   RENDER: DASHBOARD
+========================================================= */
+function computeStarterAlerts() {
+  if (!STATE.dashboardWeek) return [];
+  const leagues = getLeagues().filter(l => l.source !== "manual" && myTeamFor(l) && getLeagueData(l.id));
+  const alerts = [];
+  leagues.forEach(l => {
+    const data = getLeagueData(l.id);
+    const rosterId = myTeamFor(l);
+    const roster = data.rosters.find(r => String(r.roster_id) === String(rosterId));
+    if (!roster) return;
+    (roster.starters || []).forEach(pid => {
+      if (!pid || pid === "0") return;
+      const p = PLAYERS ? PLAYERS[pid] : null;
+      if (!p) return;
+      const name = playerName(p, pid);
+      if (p.injury_status) {
+        alerts.push({ league: l.nickname, name, detail: p.injury_status, kind: "status" });
+      }
+      if (p.team && STATE.nflSchedule && STATE.nflSchedule.length) {
+        const hasGame = STATE.nflSchedule.some(g => g.week === STATE.dashboardWeek && (g.home === p.team || g.away === p.team));
+        if (!hasGame) alerts.push({ league: l.nickname, name, detail: "Bye", kind: "bye" });
+      }
+    });
+  });
+  return alerts;
+}
+
+function scoresStripHtml() {
+  if (!STATE.dashboardWeek) return "";
+  const leagues = getLeagues().filter(l => l.source !== "manual" && myTeamFor(l) && getLeagueData(l.id));
+  if (leagues.length === 0) return "";
+  const rows = leagues.map(l => {
+    const data = getLeagueData(l.id);
+    const myRosterId = myTeamFor(l);
+    const matchups = (STATE.matchupsCache && STATE.matchupsCache[l.id]) || [];
+    const mine = matchups.find(m => String(m.roster_id) === String(myRosterId));
+    if (!mine) return null;
+    const opp = matchups.find(m => m.matchup_id === mine.matchup_id && String(m.roster_id) !== String(myRosterId));
+    const winning = opp ? mine.points > opp.points : null;
+    const color = winning === true ? "var(--win)" : winning === false ? "var(--loss)" : "var(--text)";
+    return `<div class="league-card-row" style="cursor:pointer;" onclick="viewMatchupDetail('${l.id}', ${STATE.dashboardWeek}, ${mine.matchup_id})">
+      <span>${escapeHtml(l.nickname)}</span>
+      <span class="mono" style="color:${color}; font-weight:700;">${(mine.points||0).toFixed(1)} - ${opp ? (opp.points||0).toFixed(1) : "-"}</span>
+    </div>`;
+  }).filter(Boolean);
+  if (rows.length === 0) return "";
+  return `
+    <div class="panel" style="padding:12px 14px; margin-top:14px;">
+      <div style="font-size:11px; font-weight:700; color:var(--text-faint); letter-spacing:0.06em; margin-bottom:6px;">WEEK ${STATE.dashboardWeek} SCORES</div>
+      ${rows.join("")}
+    </div>`;
+}
+
+function waiverReminderHtml() {
+  const leagues = getLeagues()
+    .filter(l => l.source !== "manual" && l.waiverDays && l.waiverDays.length && l.waiverTime)
+    .map(l => ({ l, next: nextWaiverRun(l) }))
+    .filter(x => x.next)
+    .sort((a, b) => a.next - b.next);
+  if (leagues.length === 0) return "";
+  return `
+    <div class="panel" style="padding:12px 14px; margin-top:14px;">
+      <div style="font-size:11px; font-weight:700; color:var(--text-faint); letter-spacing:0.06em; margin-bottom:6px;">NEXT WAIVER RUNS</div>
+      ${leagues.map(({l, next}) => `<div class="league-card-row"><span>${escapeHtml(l.nickname)}</span><span class="muted">${escapeHtml(fmtNextRun(next))}${l.waiverDaily ? " (daily)" : ""}</span></div>`).join("")}
+    </div>`;
+}
+
+function renderDashboard() {
+  const leagues = getLeagues();
+  const wrap = document.createElement("div");
+
+  const profile = getProfile();
+  if (!profile && leagues.length > 0) {
+    wrap.appendChild(el(`
+      <div class="banner-error" style="color:var(--gold); background:rgba(215,165,62,0.08); border-color:rgba(215,165,62,0.3); margin-top:16px;">
+        Set your name (top right) so you can claim which team is yours in each league - manage that from the Sync Leagues tab.
+      </div>
+    `));
+  }
+
+  const alerts = computeStarterAlerts();
+  if (alerts.length > 0) {
+    wrap.appendChild(el(`
+      <div class="panel" style="padding:12px 14px; margin-top:16px; border-color:var(--loss);">
+        <div style="font-size:11px; font-weight:700; color:var(--loss); letter-spacing:0.06em; margin-bottom:6px;">LINEUP ALERTS - WEEK ${STATE.dashboardWeek || "?"}</div>
+        ${alerts.map(a => `
+          <div class="prow" style="justify-content:space-between;">
+            <span>${escapeHtml(a.name)} <span class="muted">(${escapeHtml(a.league)})</span></span>
+            <span class="pbadge" style="background:${a.kind==='bye' ? 'var(--text-faint)' : 'var(--gold)'};">${escapeHtml(a.detail)}</span>
+          </div>`).join("")}
+      </div>
+    `));
+  }
+
+  const scoresHtml = scoresStripHtml();
+  if (scoresHtml) wrap.appendChild(el(scoresHtml));
+
+  const waiverHtml = waiverReminderHtml();
+  if (waiverHtml) wrap.appendChild(el(waiverHtml));
+
+  if (leagues.length === 0) {
+    wrap.appendChild(el(`
+      <div class="empty-state">
+        <p>No leagues saved yet.</p>
+        <p class="muted">Head to the Sync Leagues tab to add one, or connect cloud sync if someone else already has.</p>
+        <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick="navigate('sync')">Go to Sync Leagues</button>
+      </div>
+    `));
+    return wrap;
+  }
+
+  const visibleLeagues = leagues.filter(l => !isDismissedByMe(l));
+  if (visibleLeagues.length === 0) {
+    wrap.appendChild(el(`
+      <div class="empty-state">
+        <p>You've marked all ${leagues.length} shared league${leagues.length===1?"":"s"} as not yours.</p>
+        <p class="muted">Open a league and change its "My team" picker if that's not right.</p>
+      </div>
+    `));
+    return wrap;
+  }
+
+  wrap.appendChild(el(`<div style="margin-top:16px;"></div>`));
+  const grid = document.createElement("div");
+  grid.className = "league-grid";
+  visibleLeagues.forEach(l => {
+    const data = getLeagueData(l.id);
+    const standings = data ? computeStandings(data.rosters, data.users) : [];
+    const top = standings[0];
+    const myIdx = myTeamFor(l) ? standings.findIndex(s => String(s.rosterId) === String(myTeamFor(l))) : -1;
+    const mine = myIdx >= 0 ? standings[myIdx] : null;
+    grid.appendChild(el(`
+      <div class="league-card" onclick="openLeague('${l.id}')">
+        <div class="league-card-title">${escapeHtml(l.nickname)} <span class="muted mono" style="font-size:9.5px;">${escapeHtml((l.source||"sleeper").toUpperCase())}</span></div>
+        <div class="league-card-sub">${data ? escapeHtml(data.league.season) + " | " + data.rosters.length + " teams" : "Not synced yet"}</div>
+        ${top ? `<div class="league-card-row"><span>Leader</span><span>${escapeHtml(top.name)} (${top.wins}-${top.losses}${top.ties?`-${top.ties}`:""})</span></div>` : ""}
+        ${mine ? `<div class="league-card-row"><span>My Team</span><span>${escapeHtml(mine.name)} (${mine.wins}-${mine.losses}${mine.ties?`-${mine.ties}`:""}) - #${myIdx+1}</span></div>` : ""}
+        <div class="league-card-row"><span>${l.source === "manual" ? "Last updated" : "Last synced"}</span><span class="mono">${fmtTime(data?.syncedAt)}</span></div>
+        <div class="league-card-actions" onclick="event.stopPropagation()">
+          ${l.source === "manual" ? "" : `<button class="btn btn-sm" onclick="syncOne('${l.id}')">Sync</button>`}
+          <button class="btn btn-sm" onclick="renameLeague('${l.id}')">Rename</button>
+          <button class="btn btn-sm btn-danger" onclick="removeLeague('${l.id}')">Remove</button>
+        </div>
+      </div>
+    `));
+  });
+  wrap.appendChild(grid);
+
+  return wrap;
+}
+
+/* =========================================================
+   RENDER: SYNC LEAGUES (add sources, cloud sync, claim teams,
+   player DB - everything about *managing* your leagues lives
+   here so the Dashboard stays a clean read of standings)
+========================================================= */
+function renderSync() {
+  const wrap = document.createElement("div");
+
+  wrap.appendChild(el(`
+    <div class="panel" style="padding:14px; margin-top:16px;">
+      <div style="font-size:13px; font-weight:700; margin-bottom:4px;">Add a league</div>
+      <div class="muted" style="font-size:11.5px; margin-bottom:10px;">
+        Sleeper syncs live. No API for ESPN or DraftKings Best Ball yet, so use Manual to track those by hand.
+      </div>
+      <div class="row">
+        <select id="add-league-source" style="font-size:13px;" onchange="onAddLeagueSourceChange(this.value)">
+          <option value="sleeper">Sleeper</option>
+          <option value="manual">Manual (ESPN, DraftKings, other)</option>
+          <option value="yahoo" disabled>Yahoo (coming soon)</option>
+          <option value="mfl" disabled>MFL (coming soon)</option>
+        </select>
+        <input id="add-league-input" type="text" placeholder="Paste a Sleeper league ID..." style="flex:1; min-width:220px;"
+          onkeydown="if(event.key==='Enter') addLeague()" />
+        <button class="btn btn-primary" onclick="addLeague()" ${STATE.loading?"disabled":""}>
+          ${STATE.loading ? '<span class="spinner"></span>' : '+'} Add league
+        </button>
+      </div>
+    </div>
+  `));
+
+  wrap.appendChild(renderCloudPanel());
+
+  const claimPanel = renderClaimTeamsPanel();
+  if (claimPanel) wrap.appendChild(claimPanel);
+
+  const pc = getPlayersCache();
+  wrap.appendChild(el(`
+    <div class="row" style="margin-top:14px; justify-content:space-between;">
+      <span class="muted mono" style="font-size:11px;">Sleeper player database updated ${fmtTime(pc?.updatedAt)}</span>
+      <button class="btn btn-sm" onclick="refreshPlayers()">Refresh player DB</button>
+    </div>
+  `));
+
+  return wrap;
+}
+
+function renderCloudPanel() {
+  const cfg = getCloudConfig();
+  if (cfg) {
+    return el(`
+      <div class="panel" style="padding:14px; margin-top:14px;">
+        <div class="row" style="justify-content:space-between;">
+          <span style="font-size:13px; font-weight:700; color:var(--gold);">Cloud sync connected</span>
+          <div class="row">
+            <button class="btn btn-sm" onclick="pullCloudNow()">Pull latest</button>
+            <button class="btn btn-sm btn-danger" onclick="disconnectCloud()">Disconnect</button>
+          </div>
+        </div>
+        <div class="muted" style="font-size:11.5px; margin-top:6px;">
+          Your saved-league list syncs across every device connected with the same URL, key, and passphrase. Add a league here, it shows up on your phone next time it pulls.
+        </div>
+      </div>
+    `);
+  }
+  return el(`
+    <div class="panel" style="padding:14px; margin-top:14px;">
+      <div style="font-size:13px; font-weight:700; margin-bottom:4px;">Cloud sync (optional)</div>
+      <div class="muted" style="font-size:11.5px; margin-bottom:10px;">
+        Connect a free Supabase project to keep your saved-league list in sync across devices.
+        Roster and standings data still comes fresh from Sleeper on each device - this only syncs which leagues you've added.
+      </div>
+      <div class="row">
+        <input id="cloud-url-input" type="text" placeholder="Supabase project URL" style="flex:1; min-width:180px;" />
+        <input id="cloud-key-input" type="text" placeholder="Supabase anon public key" style="flex:1; min-width:180px;" />
+        <input id="cloud-pass-input" type="text" placeholder="Shared passphrase" style="flex:1; min-width:140px;" />
+        <button class="btn btn-primary btn-sm" onclick="connectCloud()" ${STATE.loading?"disabled":""}>Connect</button>
+      </div>
+    </div>
+  `);
+}
+
+/* -------- claim-your-teams onboarding panel -------- */
+function renderClaimTeamsPanel() {
+  const profile = getProfile();
+  if (!profile) return null;
+  const leagues = getLeagues();
+  const unclaimed = leagues.filter(l => rawTeamPick(l) === null);
+  if (unclaimed.length === 0) return null;
+
+  return el(`
+    <div class="panel" style="padding:14px; margin-top:14px;">
+      <div style="font-size:13px; font-weight:700; margin-bottom:4px;">Claim your teams</div>
+      <div class="muted" style="font-size:11.5px; margin-bottom:10px;">
+        Pick which roster is yours in each league so Needs, Exposure, and the dashboard track it under "${escapeHtml(profile)}." Mark leagues you're not in as "Not my league" so they stop showing up for you.
+      </div>
+      ${unclaimed.map(l => {
+        const data = getLeagueData(l.id);
+        if (!data) {
+          return `
+            <div class="row" style="justify-content:space-between; padding:6px 0; border-top:1px solid var(--line);">
+              <span style="font-size:12.5px;">${escapeHtml(l.nickname)}</span>
+              <button class="btn btn-sm" onclick="syncOne('${l.id}')" ${STATE.loading?"disabled":""}>Sync to select team</button>
+            </div>`;
+        }
+        return `
+          <div class="row" style="justify-content:space-between; padding:6px 0; border-top:1px solid var(--line);">
+            <span style="font-size:12.5px;">${escapeHtml(l.nickname)}</span>
+            <select onchange="setMyTeam('${l.id}', this.value)" style="font-size:12px;">
+              <option value="">Decide later...</option>
+              <option value="NONE">Not my league</option>
+              ${data.rosters.map(r => `<option value="${r.roster_id}">${escapeHtml(teamLabel(r, data.users))}</option>`).join("")}
+            </select>
+          </div>`;
+      }).join("")}
+    </div>
+  `);
+}
+
+/* =========================================================
+   RENDER: LEAGUE DETAIL
+========================================================= */
+function renderLeagueDetail() {
+  const wrap = document.createElement("div");
+  const leagues = getLeagues();
+  const meta = leagues.find(l => l.id === STATE.leagueId);
+  const data = getLeagueData(STATE.leagueId);
+  const isManual = meta?.source === "manual";
+
+  if (!data) {
+    wrap.appendChild(el(`<div class="empty-state"><p>No data for this league yet.</p>
+      <button class="btn btn-primary" onclick="syncOne('${STATE.leagueId}')">Sync now</button></div>`));
+    return wrap;
+  }
+
+  wrap.appendChild(el(`
+    <div class="row" style="margin-top:16px; justify-content:space-between;">
+      <div>
+        <div style="font-weight:800; font-size:18px;">${escapeHtml(meta?.nickname || data.league.name)} ${isManual ? '<span class="muted mono" style="font-size:10px;">MANUAL</span>' : ''}</div>
+        <div class="muted" style="font-size:12px;">${escapeHtml(data.league.season)} | ${isManual ? "updated" : "synced"} ${fmtTime(data.syncedAt)}</div>
+      </div>
+      <div class="row">
+        <select onchange="setMyTeam('${STATE.leagueId}', this.value)" style="font-size:12px;">
+          <option value="">My team...</option>
+          <option value="NONE" ${rawTeamPick(meta||{})==="NONE"?"selected":""}>Not my league</option>
+          ${data.rosters.map(r => `<option value="${r.roster_id}" ${String(rawTeamPick(meta||{}))===String(r.roster_id)?"selected":""}>${escapeHtml(teamLabel(r, data.users))}</option>`).join("")}
+        </select>
+        ${isManual ? "" : `
+        <button class="btn btn-sm" onclick="syncOne('${STATE.leagueId}')" ${STATE.loading?"disabled":""}>
+          ${STATE.loading ? '<span class="spinner"></span>' : ''} Sync
+        </button>`}
+        <button class="btn btn-sm" onclick="navigate('dashboard')">Back to Dashboard</button>
+      </div>
+    </div>
+  `));
+
+  if (isManual) {
+    wrap.appendChild(el(renderManualTeamsEditor(STATE.leagueId, data)));
+  }
+
+  wrap.appendChild(el(`
+    <div class="tabs">
+      <button class="nav-btn ${STATE.tab==='standings'?'active':''}" onclick="setTab('standings')">Standings</button>
+      <button class="nav-btn ${STATE.tab==='rosters'?'active':''}" onclick="setTab('rosters')">Rosters</button>
+    </div>
+  `));
+
+  if (STATE.tab === "standings") {
+    const standings = computeStandings(data.rosters, data.users);
+    const table = document.createElement("div");
+    table.className = "panel";
+    table.innerHTML = `
+      <table>
+        <thead><tr><th style="width:32px;">#</th><th>Team</th><th class="num">Record</th><th class="num">PF</th><th class="num">PA</th></tr></thead>
+        <tbody>
+          ${standings.map((row,i) => `
+            <tr>
+              <td class="rank">${i+1}</td>
+              <td style="font-weight:600;">${escapeHtml(row.name)}</td>
+              <td class="num mono">${row.wins}-${row.losses}${row.ties?`-${row.ties}`:""}</td>
+              <td class="num mono">${row.pf.toFixed(2)}</td>
+              <td class="num mono muted">${row.pa.toFixed(2)}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+    wrap.appendChild(table);
+  } else {
+    wrap.appendChild(el(`
+      <input type="text" placeholder="Filter by team name..." style="width:100%; margin-bottom:14px;"
+        oninput="setRosterFilter(this.value)" value="${escapeHtml(STATE.rosterFilter)}" />
+    `));
+    const grid = document.createElement("div");
+    grid.className = "roster-grid";
+    grid.id = "roster-grid";
+    grid.innerHTML = rosterGridHtml(data, meta);
+    wrap.appendChild(grid);
+  }
+
+  return wrap;
+}
+
+function renderRosterGridOnly() {
+  const grid = document.getElementById("roster-grid");
+  if (!grid) return;
+  const data = getLeagueData(STATE.leagueId);
+  const meta = getLeagues().find(l => l.id === STATE.leagueId);
+  grid.innerHTML = rosterGridHtml(data, meta);
+}
+
+function rosterGridHtml(data, leagueEntry) {
+  const q = (STATE.rosterFilter || "").toLowerCase();
+  const slots = starterSlots(data.league);
+  const myRosterId = leagueEntry ? myTeamFor(leagueEntry) : null;
+  return data.rosters
+    .filter(r => !q || teamLabel(r, data.users).toLowerCase().includes(q))
+    .map(r => rosterCardHtml(r, data.users, slots, data.league, myRosterId))
+    .join("");
+}
+
+function formatSlotLabel(slot) {
+  const abbrev = {
+    SUPER_FLEX: "SFLX", IDP_FLEX: "IDPX", WRRB_FLEX: "WRRB",
+    REC_FLEX: "RECX", RB_FLEX: "RBFX", WR_FLEX: "WRFX", TE_FLEX: "TEFX"
+  };
+  return abbrev[slot] || slot;
+}
+
+function rosterCardHtml(roster, users, slots, league, myRosterId) {
+  const starters = roster.starters || [];
+  const reserve = roster.reserve || [];
+  const taxi = roster.taxi || [];
+  const all = roster.players || [];
+  const bench = all.filter(id => !starters.includes(id) && !reserve.includes(id) && !taxi.includes(id));
+  const isMine = myRosterId != null && String(roster.roster_id) === String(myRosterId);
+
+  const row = (id, idx, showSlot) => {
+    if (!id || id === "0") {
+      return `<div class="prow empty"><span class="slot-tag">${slots[idx] ? formatSlotLabel(slots[idx]) : "-"}</span><span class="pname muted">Empty</span></div>`;
+    }
+    const p = PLAYERS ? PLAYERS[id] : null;
+    const badge = badgeInfo(p);
+    return `<div class="prow">
+      ${showSlot ? `<span class="slot-tag">${slots[idx] ? formatSlotLabel(slots[idx]) : badge.label}</span>` : ""}
+      <span class="pname">${escapeHtml(playerName(p, id))}</span>
+      <span class="pbadge" style="background:${badge.color}">${badge.label}</span>
+      ${p?.team ? `<span class="pteam">${p.team}</span>` : ""}
+    </div>`;
+  };
+
+  // Position totals, limited to positions this league's roster_positions actually supports -
+  // so a league with no IDP slots doesn't show a row of DL/LB/DB zeros.
+  let countsHtml = "";
+  if (league) {
+    const counts = {};
+    all.forEach(id => {
+      const p = PLAYERS ? PLAYERS[id] : null;
+      const fp = (p && (p.fantasy_positions?.[0] || p.position)) || null;
+      if (fp) counts[fp] = (counts[fp] || 0) + 1;
+    });
+    const relevant = POS_GROUPS.filter(pg => leagueSupportsPosition(league, pg) && counts[pg]);
+    if (relevant.length > 0) {
+      countsHtml = `<div class="muted mono" style="font-size:10px; margin-top:6px; padding-top:6px; border-top:1px solid var(--line);">
+        ${relevant.map(pg => `${pg} ${counts[pg]}`).join(" &middot; ")}
+      </div>`;
+    }
+  }
+
+  return `
+    <div class="rcard" style="${isMine ? 'border-color: var(--gold); background: rgba(215,165,62,0.06);' : ''}">
+      <div class="rcard-head">
+        <span class="rcard-title">${isMine ? '<span class="pbadge" style="background:var(--gold); margin-right:5px;">MINE</span>' : ''}${escapeHtml(teamLabel(roster, users))}</span>
+        <span class="rcard-count">${all.length} rostered</span>
+      </div>
+      <div class="rcard-section">
+        <div class="rcard-section-label">Starters</div>
+        ${starters.map((id,idx) => row(id, idx, true)).join("")}
+      </div>
+      ${bench.length ? `<div class="rcard-section"><div class="rcard-section-label">Bench</div>${bench.map(id=>row(id,null,false)).join("")}</div>` : ""}
+      ${taxi.length ? `<div class="rcard-section"><div class="rcard-section-label">Taxi</div>${taxi.map(id=>row(id,null,false)).join("")}</div>` : ""}
+      ${reserve.length ? `<div class="rcard-section"><div class="rcard-section-label">IR</div>${reserve.map(id=>row(id,null,false)).join("")}</div>` : ""}
+      ${countsHtml}
+    </div>`;
+}
+
+/* =========================================================
+   RENDER: PLAYER FINDER (cross-league)
+========================================================= */
+function renderFinder() {
+  const wrap = document.createElement("div");
+  wrap.appendChild(el(`
+    <div style="margin-top:16px;">
+      <input id="finder-input" type="text" placeholder="Search a player across every saved league..." style="width:100%;"
+        oninput="onFinderInput(this.value)" value="${escapeHtml(STATE.finderQuery || "")}" />
+    </div>
+    <div class="row" style="margin-top:8px;">
+      <button class="btn btn-sm ${STATE.showFinderPoints?'btn-primary':''}" onclick="toggleFinderPoints()">
+        ${STATE.showFinderPoints ? '<span class="spinner"></span>' : ''} 2025 points by league (beta)
+      </button>
+      ${STATE.showFinderPoints ? '<span class="muted" style="font-size:10.5px;">Uses an unofficial Sleeper endpoint - may be unavailable</span>' : ''}
+    </div>
+  `));
+  const results = document.createElement("div");
+  results.id = "finder-results";
+  results.innerHTML = finderResultsHtml();
+  wrap.appendChild(results);
+
+  wrap.appendChild(el(`<div style="font-weight:700; margin:20px 0 8px;">Your players</div>`));
+  const list = document.createElement("div");
+  list.id = "finder-watchlist";
+  list.innerHTML = finderWatchlistHtml();
+  wrap.appendChild(list);
+
+  return wrap;
+}
+
+function getFinderWatchlist() { return DB.get("finderWatchlist", []); }
+function saveFinderWatchlist(list) { DB.set("finderWatchlist", list); }
+
+window.addToFinderWatchlist = function (playerId) {
+  const list = getFinderWatchlist();
+  if (!list.includes(playerId)) list.push(playerId);
+  saveFinderWatchlist(list);
+  const results = document.getElementById("finder-results");
+  if (results) results.innerHTML = finderResultsHtml();
+  const box = document.getElementById("finder-watchlist");
+  if (box) box.innerHTML = finderWatchlistHtml();
+};
+window.removeFromFinderWatchlist = function (playerId) {
+  const list = getFinderWatchlist().filter(id => id !== playerId);
+  saveFinderWatchlist(list);
+  const results = document.getElementById("finder-results");
+  if (results) results.innerHTML = finderResultsHtml();
+  const box = document.getElementById("finder-watchlist");
+  if (box) box.innerHTML = finderWatchlistHtml();
+};
+
+function freeAgentLeaguesHtml(playerId, ownedLeagueIds) {
+  const leagues = getLeagues().filter(l => l.source !== "manual" && !isDismissedByMe(l) && getLeagueData(l.id));
+  const notOwned = leagues.filter(l => !ownedLeagueIds.has(l.id)).map(l => l.nickname);
+  if (notOwned.length === 0) return "";
+  return `<div class="muted" style="font-size:10.5px; margin-top:6px;">Free agent in: ${notOwned.map(n => escapeHtml(n)).join(", ")}</div>`;
+}
+
+function finderWatchlistHtml() {
+  const list = getFinderWatchlist();
+  if (list.length === 0) {
+    return `<div class="empty-state"><p>No players added yet. Search above and click "+ Add" on any result.</p></div>`;
+  }
+  const leagues = getLeagues();
+  return list.map(id => {
+    const p = PLAYERS ? PLAYERS[id] : null;
+    const badge = badgeInfo(p);
+    const hits = [];
+    const ownedLeagueIds = new Set();
+    leagues.forEach(l => {
+      const data = getLeagueData(l.id);
+      if (!data) return;
+      data.rosters.forEach(r => {
+        if ((r.players || []).includes(id)) {
+          ownedLeagueIds.add(l.id);
+          hits.push({
+            leagueId: l.id, leagueName: l.nickname, teamName: teamLabel(r, data.users),
+            status: (r.starters || []).includes(id) ? "Starter" : "Bench"
+          });
+        }
+      });
+    });
+    const statsObj = STATE.showFinderPoints ? STATE.playerSeasonStats[id] : undefined;
+    const hitRows = hits.map(h => {
+      let pointsText = "";
+      if (STATE.showFinderPoints) {
+        if (statsObj === null) pointsText = " - stats unavailable";
+        else if (statsObj) {
+          const hd = getLeagueData(h.leagueId);
+          const pts = hd ? computeLeaguePoints(statsObj, hd.league.scoring_settings) : null;
+          pointsText = pts !== null ? ` - ${pts.toFixed(1)} pts (2025)` : "";
+        }
+      }
+      return `<div class="finder-hit"><span>${escapeHtml(h.leagueName)} - ${escapeHtml(h.teamName)}${pointsText}</span><span class="muted">${h.status}</span></div>`;
+    }).join("");
+    return `
+      <div class="finder-result">
+        <div class="row" style="justify-content:space-between;">
+          <span class="finder-player-name">${escapeHtml(playerName(p, id))}</span>
+          <div class="row">
+            <span class="pbadge" style="background:${badge.color}">${badge.label}</span>
+            <button class="btn btn-sm btn-danger" onclick="removeFromFinderWatchlist('${id}')">Remove</button>
+          </div>
+        </div>
+        ${hitRows || '<div class="muted" style="font-size:12px; margin-top:6px;">Not rostered in any saved league.</div>'}
+        ${freeAgentLeaguesHtml(id, ownedLeagueIds)}
+      </div>`;
+  }).join("");
+}
+
+function computeLeaguePoints(statsObj, scoringSettings) {
+  if (!statsObj || !scoringSettings) return null;
+  const stats = statsObj.stats || statsObj;
+  if (!stats || typeof stats !== "object") return null;
+  let total = 0, matched = false;
+  for (const key in scoringSettings) {
+    if (typeof stats[key] === "number") {
+      total += stats[key] * scoringSettings[key];
+      matched = true;
+    }
+  }
+  return matched ? total : null;
+}
+
+async function fetchPlayerSeasonStats(playerId, season) {
+  const res = await fetch(`https://api.sleeper.com/stats/nfl/player/${playerId}?season_type=regular&season=${season}`);
+  if (!res.ok) throw new Error("unavailable");
+  return res.json();
+}
+
+async function loadFinderPointsForCurrentResults() {
+  const q = (STATE.finderQuery || "").trim().toLowerCase();
+  if (!q) return;
+  const leagues = getLeagues();
+  const ids = new Set();
+  leagues.forEach(l => {
+    const data = getLeagueData(l.id);
+    if (!data) return;
+    data.rosters.forEach(r => (r.players || []).forEach(id => {
+      const p = PLAYERS ? PLAYERS[id] : null;
+      if (playerName(p, id).toLowerCase().includes(q)) ids.add(id);
+    }));
+  });
+  for (const id of ids) {
+    if (STATE.playerSeasonStats[id] !== undefined) continue;
+    try { STATE.playerSeasonStats[id] = await fetchPlayerSeasonStats(id, "2025"); }
+    catch (e) { STATE.playerSeasonStats[id] = null; }
+  }
+}
+
+window.toggleFinderPoints = async function () {
+  STATE.showFinderPoints = !STATE.showFinderPoints;
+  if (STATE.showFinderPoints) {
+    render();
+    await loadFinderPointsForCurrentResults();
+  }
+  render();
+};
+
+/* =========================================================
+   RANKINGS: top 50 by position, 2025 total + points per game
+   (beta - relies on the same unofficial stats endpoint as
+   Player Finder's points feature)
+========================================================= */
+const RANKINGS_POSITIONS = ["QB","RB","WR","TE","K","DEF","DL","LB","DB"];
+
+/* =========================================================
+   NFLVERSE (real, reliable data - replaces the unofficial
+   Sleeper stats endpoints where a per-player join is possible)
+
+   GitHub's release-asset CDN doesn't send CORS headers, so the raw
+   CSV can't be fetched directly from a browser. Instead, this reads
+   a small pre-built JSON snapshot (nflverse_stats.json) hosted
+   alongside this file - same-origin, so no CORS issue at all. The
+   snapshot is generated by joining nflverse's season stats to
+   Sleeper player IDs via the DynastyProcess crosswalk, with columns
+   already translated to Sleeper-style scoring keys. Refresh it by
+   asking Claude to regenerate and re-upload it periodically.
+========================================================= */
+let NFLVERSE_STATS_CACHE = null; // { season, bySleeperId, unavailable }
+async function ensureNflverseSeasonStats() {
+  if (NFLVERSE_STATS_CACHE) return NFLVERSE_STATS_CACHE;
+  let res;
+  try { res = await fetch("./nflverse_stats.json"); } catch (e) { res = null; }
+  if (!res || !res.ok) {
+    NFLVERSE_STATS_CACHE = { season: null, bySleeperId: {}, unavailable: true };
+    return NFLVERSE_STATS_CACHE;
+  }
+  const json = await res.json();
+  NFLVERSE_STATS_CACHE = { season: json.season, bySleeperId: json.players || {}, unavailable: false };
+  return NFLVERSE_STATS_CACHE;
+}
+
+window.setRankingsLeague = function (id) { STATE.rankingsLeagueId = id; render(); };
+window.setRankingsPosition = function (p) { STATE.rankingsPosition = p; render(); };
+
+window.loadRankings = async function () {
+  const leagueId = STATE.rankingsLeagueId;
+  const position = STATE.rankingsPosition;
+  if (!leagueId) return;
+  await withLoading(async () => {
+    if (!PLAYERS) PLAYERS = await ensurePlayers(false);
+    const data = getLeagueData(leagueId);
+    const scoring = data ? data.league.scoring_settings : null;
+    const key = `${leagueId}|${position}`;
+
+    if (position === "DEF") {
+      // Team defenses have no GSIS id / individual player row - stays on the
+      // original unofficial Sleeper endpoint, same as before.
+      let rows;
+      try {
+        const res = await fetch(`https://api.sleeper.com/stats/nfl/2025?season_type=regular&position[]=DEF&order_by=pts_std`);
+        if (!res.ok) throw new Error("bad response");
+        rows = await res.json();
+      } catch (e) {
+        STATE.rankingsData[key] = null;
+        return;
+      }
+      const gpKeys = ["gp", "gms_active", "g", "games_played"];
+      const computed = (rows || []).map(row => {
+        const pid = row.player_id || row.playerId;
+        const pl = PLAYERS ? PLAYERS[pid] : null;
+        const pts = computeLeaguePoints(row, scoring);
+        const statsBlob = row.stats || row;
+        let gp = null;
+        for (const k of gpKeys) { if (typeof statsBlob[k] === "number" && statsBlob[k] > 0) { gp = statsBlob[k]; break; } }
+        return { id: pid, name: playerName(pl, pid), team: (pl && pl.team) || row.team || "", badge: badgeInfo(pl), total: pts, gp };
+      }).filter(r => r.id && r.total !== null);
+      computed.sort((a, b) => b.total - a.total);
+      STATE.rankingsData[key] = computed.slice(0, 50);
+      return;
+    }
+
+    // Every other position: real nflverse data, joined to Sleeper via the
+    // DynastyProcess ID crosswalk (pre-built into nflverse_stats.json).
+    let nflverse;
+    try {
+      nflverse = await ensureNflverseSeasonStats();
+    } catch (e) {
+      STATE.rankingsData[key] = null;
+      return;
+    }
+    if (nflverse.unavailable) {
+      STATE.rankingsData[key] = null;
+      return;
+    }
+    const computed = [];
+    for (const sleeperId in nflverse.bySleeperId) {
+      const pl = PLAYERS ? PLAYERS[sleeperId] : null;
+      if (!pl) continue;
+      const fp = pl.fantasy_positions?.[0] || pl.position;
+      if (fp !== position) continue;
+      const bucket = nflverse.bySleeperId[sleeperId];
+      const pts = computeLeaguePoints(bucket, scoring);
+      if (pts === null) continue;
+      computed.push({ id: sleeperId, name: playerName(pl, sleeperId), team: pl.team || "", badge: badgeInfo(pl), total: pts, gp: bucket.weeks });
+    }
+    computed.sort((a, b) => b.total - a.total);
+    STATE.rankingsData[key] = computed.slice(0, 50);
+  });
+};
+
+function renderRankings() {
+  const wrap = document.createElement("div");
+  const leagues = getLeagues().filter(l => l.source !== "manual");
+  if (leagues.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Add a Sleeper league first - rankings need a league's scoring settings to compute points.</p></div>`));
+    return wrap;
+  }
+  if (!STATE.rankingsLeagueId || !leagues.find(l => l.id === STATE.rankingsLeagueId)) {
+    STATE.rankingsLeagueId = leagues[0].id;
+  }
+
+  wrap.appendChild(el(`
+    <div class="row" style="margin-top:16px; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+      <div class="row">
+        <span class="muted" style="font-size:12px;">Scoring from</span>
+        <select onchange="setRankingsLeague(this.value)">
+          ${leagues.map(l => `<option value="${l.id}" ${l.id===STATE.rankingsLeagueId?"selected":""}>${escapeHtml(l.nickname)}</option>`).join("")}
+        </select>
+        <select onchange="setRankingsPosition(this.value)">
+          ${RANKINGS_POSITIONS.map(p => `<option value="${p}" ${p===STATE.rankingsPosition?"selected":""}>${p}</option>`).join("")}
+        </select>
+      </div>
+      <button class="btn btn-sm btn-primary" onclick="loadRankings()" ${STATE.loading?"disabled":""}>
+        ${STATE.loading ? '<span class="spinner"></span>' : ''} Load top 50
+      </button>
+    </div>
+    <div class="muted" style="font-size:10.5px; margin-top:6px;">QB/RB/WR/TE/K/DL/LB/DB via nflverse - DEF via an unofficial Sleeper endpoint, beta</div>
+    <div class="panel" style="padding:10px 14px; margin-top:10px; border-color: var(--gold);">
+      <span style="font-weight:700; font-size:12px; color: var(--gold);">Once the 2026 season starts:</span>
+      <div class="muted" style="font-size:11.5px; margin-top:3px;">
+        This data is a snapshot, not a live feed. Once real 2026 games have been played, ask Claude:
+        <em>"Regenerate nflverse_stats.json for the 2026 season"</em> - then upload the new file to your repo the usual way. Repeat periodically through the season to keep it current.
+      </div>
+    </div>
+  `));
+
+  const key = `${STATE.rankingsLeagueId}|${STATE.rankingsPosition}`;
+  const rows = STATE.rankingsData[key];
+
+  if (rows === undefined) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Click "Load top 50" to fetch ${STATE.rankingsPosition} rankings.</p></div>`));
+    return wrap;
+  }
+  if (rows === null) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Stats unavailable for this position right now.</p></div>`));
+    return wrap;
+  }
+  if (rows.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>No scoreable data found for ${STATE.rankingsPosition} in 2025 yet.</p></div>`));
+    return wrap;
+  }
+
+  const panel = document.createElement("div");
+  panel.className = "panel";
+  panel.innerHTML = `
+    <table>
+      <thead><tr><th style="width:32px;">#</th><th>Player</th><th class="num">Total</th><th class="num">GP</th><th class="num">PPG</th></tr></thead>
+      <tbody>
+        ${rows.map((r, i) => `
+          <tr>
+            <td class="rank">${i+1}</td>
+            <td>${escapeHtml(r.name)} ${r.team ? `<span class="muted mono" style="font-size:10px;">${escapeHtml(r.team)}</span>` : ""}</td>
+            <td class="num mono">${r.total.toFixed(1)}</td>
+            <td class="num mono">${r.gp || "-"}</td>
+            <td class="num mono">${r.gp ? (r.total / r.gp).toFixed(1) : "-"}</td>
+          </tr>`).join("")}
+      </tbody>
+    </table>`;
+  wrap.appendChild(panel);
+  return wrap;
+}
+
+/* =========================================================
+   WAIVER TARGETS (beta - relies on the same unofficial stats
+   endpoints as Rankings/Finder points)
+========================================================= */
+function getWaiverTargetsList() { return DB.get("waiverTargetsList", []); } // [{playerId, leagueId}]
+function saveWaiverTargetsList(list) { DB.set("waiverTargetsList", list); }
+window.addWaiverTarget = function (playerId, leagueId) {
+  const list = getWaiverTargetsList();
+  if (!list.find(t => t.playerId === playerId && t.leagueId === leagueId)) {
+    list.push({ playerId, leagueId });
+    saveWaiverTargetsList(list);
+  }
+  render();
+};
+window.removeWaiverTarget = function (playerId, leagueId) {
+  saveWaiverTargetsList(getWaiverTargetsList().filter(t => !(t.playerId === playerId && t.leagueId === leagueId)));
+  render();
+};
+
+window.setWaiverTargetsLeague = function (id) { STATE.waiverTargetsLeagueId = id; STATE.waiverTargetsData = null; render(); };
+
+window.setWaiverTargetsMetric = function (metric) {
+  STATE.waiverTargetsMetric = metric;
+  STATE.waiverTargetsData = null; // underlying data differs per metric, force a fresh analyze
+  render();
+};
+
+function waiverMetricPoints(statsLike, weeks, metric, scoring) {
+  const pts = computeLeaguePoints(statsLike, scoring);
+  if (pts === null) return null;
+  if (metric === "recent" && weeks > 0) return pts / weeks;
+  return pts;
+}
+
+window.loadWaiverTargets = async function () {
+  const leagueId = STATE.waiverTargetsLeagueId;
+  const metric = STATE.waiverTargetsMetric || "season";
+  if (!leagueId) return;
+  await withLoading(async () => {
+    if (!PLAYERS) PLAYERS = await ensurePlayers(false);
+    const leagueEntry = getLeagues().find(l => l.id === leagueId);
+    const data = getLeagueData(leagueId);
+    if (!data || !leagueEntry) return;
+    const myRosterId = myTeamFor(leagueEntry);
+    const myRoster = data.rosters.find(r => String(r.roster_id) === String(myRosterId));
+    if (!myRoster) { STATE.waiverTargetsData = { error: "no-team" }; return; }
+
+    const positions = POS_GROUPS.filter(pg => leagueSupportsPosition(data.league, pg));
+
+    const nflState = await ensureNflState();
+    const currentWeek = (nflState.season_type === "pre" || !nflState.week) ? 1 : nflState.week;
+    let weeksToFetch = [];
+    if (metric === "recent") {
+      for (let w = Math.max(1, currentWeek - 4); w < currentWeek; w++) weeksToFetch.push(w);
+      if (weeksToFetch.length === 0) weeksToFetch = [Math.max(1, currentWeek - 1)];
+    } else if (metric === "projected") {
+      weeksToFetch = [currentWeek];
+    }
+
+    const poolByPos = {};
+    if (metric === "season") {
+      // Free agent pool per position - bulk season-total fetch, same source as Rankings
+      for (const pos of positions) {
+        try {
+          const res = await fetch(`https://api.sleeper.com/stats/nfl/2025?season_type=regular&position[]=${pos}&order_by=pts_std`);
+          poolByPos[pos] = res.ok ? await res.json() : [];
+        } catch (e) { poolByPos[pos] = []; }
+      }
+    } else {
+      // recent-form or projected: bulk weekly fetch per week, summed/counted per player
+      const endpoint = metric === "projected" ? "projections" : "stats";
+      for (const pos of positions) {
+        const merged = {};
+        for (const w of weeksToFetch) {
+          try {
+            const res = await fetch(`https://api.sleeper.com/${endpoint}/nfl/2025/${w}?season_type=regular&position[]=${pos}`);
+            const rows = res.ok ? await res.json() : [];
+            rows.forEach(row => {
+              const pid = row.player_id || row.playerId;
+              if (!pid) return;
+              const s = row.stats || row;
+              if (!merged[pid]) merged[pid] = { player_id: pid, team: row.team, stats: {}, weeks: 0 };
+              merged[pid].weeks += 1;
+              for (const k in s) { if (typeof s[k] === "number") merged[pid].stats[k] = (merged[pid].stats[k] || 0) + s[k]; }
+            });
+          } catch (e) { /* skip that week */ }
+        }
+        poolByPos[pos] = Object.values(merged);
+      }
+    }
+
+    // My players' points using the same metric
+    STATE.playerSeasonStats = STATE.playerSeasonStats || {};
+    const myMetricCache = {};
+    if (metric === "season") {
+      for (const id of (myRoster.players || [])) {
+        if (STATE.playerSeasonStats[id] === undefined) {
+          try { STATE.playerSeasonStats[id] = await fetchPlayerSeasonStats(id, "2025"); }
+          catch (e) { STATE.playerSeasonStats[id] = null; }
+        }
+      }
+    } else {
+      const endpoint = metric === "projected" ? "projections" : "stats";
+      for (const id of (myRoster.players || [])) {
+        const sum = {}; let weeks = 0;
+        for (const w of weeksToFetch) {
+          try {
+            const res = await fetch(`https://api.sleeper.com/${endpoint}/nfl/player/${id}?season_type=regular&season=2025&week=${w}`);
+            if (res.ok) {
+              const json = await res.json();
+              const s = json && (json.stats || json);
+              if (s && Object.keys(s).length) {
+                weeks += 1;
+                for (const k in s) { if (typeof s[k] === "number") sum[k] = (sum[k] || 0) + s[k]; }
+              }
+            }
+          } catch (e) { /* skip */ }
+        }
+        myMetricCache[id] = { stats: sum, weeks };
+      }
+    }
+
+    const waiverBudget = data.league.settings && data.league.settings.waiver_budget;
+    const usedBudget = (myRoster.settings && myRoster.settings.waiver_budget_used) || 0;
+    const remainingBudget = waiverBudget ? Math.max(0, waiverBudget - usedBudget) : null;
+
+    STATE.waiverTargetsData = { leagueId, positions, poolByPos, myRosterId, metric, weeksToFetch, currentWeek, myMetricCache, waiverBudget, remainingBudget };
+  });
+};
+
+function suggestFaabBid(faPts, bestFAPts, isDropReplacement, remainingBudget) {
+  if (remainingBudget === null || remainingBudget <= 0 || !bestFAPts || bestFAPts <= 0) return null;
+  const valueRatio = Math.max(0, faPts / bestFAPts);
+  const needBoost = isDropReplacement ? 1.4 : 1.0;
+  let suggested = remainingBudget * 0.18 * valueRatio * needBoost;
+  suggested = Math.max(1, Math.min(remainingBudget, Math.round(suggested)));
+  return suggested;
+}
+
+function renderWaiverTargets() {
+  const wrap = document.createElement("div");
+  const leagues = getLeagues().filter(l => l.source !== "manual" && myTeamFor(l) && getLeagueData(l.id));
+
+  if (leagues.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Set "My team" on a league first - waiver targets need to know which roster is yours.</p></div>`));
+    return wrap;
+  }
+  if (!STATE.waiverTargetsLeagueId || !leagues.find(l => l.id === STATE.waiverTargetsLeagueId)) {
+    STATE.waiverTargetsLeagueId = leagues[0].id;
+  }
+
+  wrap.appendChild(el(`
+    <div class="row" style="margin-top:16px; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+      <select onchange="setWaiverTargetsLeague(this.value)">
+        ${leagues.map(l => `<option value="${l.id}" ${l.id===STATE.waiverTargetsLeagueId?"selected":""}>${escapeHtml(l.nickname)}</option>`).join("")}
+      </select>
+      <button class="btn btn-sm btn-primary" onclick="loadWaiverTargets()" ${STATE.loading?"disabled":""}>
+        ${STATE.loading ? '<span class="spinner"></span>' : ''} Analyze
+      </button>
+    </div>
+    <div class="row" style="margin-top:8px; gap:4px;">
+      <button class="btn btn-sm ${(!STATE.waiverTargetsMetric||STATE.waiverTargetsMetric==='season')?'btn-primary':''}" onclick="setWaiverTargetsMetric('season')">Season Total</button>
+      <button class="btn btn-sm ${STATE.waiverTargetsMetric==='recent'?'btn-primary':''}" onclick="setWaiverTargetsMetric('recent')">Last 4 Wks Avg</button>
+      <button class="btn btn-sm ${STATE.waiverTargetsMetric==='projected'?'btn-primary':''}" onclick="setWaiverTargetsMetric('projected')">This Wk Proj</button>
+    </div>
+    <div class="muted" style="font-size:10.5px; margin-top:6px;">Beta - uses unofficial Sleeper endpoints, may be incomplete or unavailable</div>
+  `));
+
+  const d = STATE.waiverTargetsData;
+  if (!d || d.leagueId !== STATE.waiverTargetsLeagueId) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Click "Analyze" to check needs and available waivers for this team.</p></div>`));
+    return wrap;
+  }
+  if (d.error === "no-team") {
+    wrap.appendChild(el(`<div class="empty-state"><p>No team set for this league.</p></div>`));
+    return wrap;
+  }
+
+  if (d.remainingBudget !== null) {
+    wrap.appendChild(el(`
+      <div class="panel" style="padding:10px 14px; margin-top:14px;">
+        <span style="font-weight:700; font-size:13px;">Your remaining FAAB: $${d.remainingBudget}</span>
+        <span class="muted" style="font-size:10.5px;"> of $${d.waiverBudget} - suggested bids below are a rough estimate from your budget and how each player ranks among available options, not a prediction of what others will bid</span>
+      </div>
+    `));
+  }
+
+  const data = getLeagueData(d.leagueId);
+  const leagueEntry = getLeagues().find(l => l.id === d.leagueId);
+  const myRoster = data.rosters.find(r => String(r.roster_id) === String(d.myRosterId));
+  const allRostered = new Set();
+  data.rosters.forEach(r => (r.players || []).forEach(id => allRostered.add(id)));
+
+  const targetsList = getWaiverTargetsList();
+  const metric = d.metric || "season";
+  const metricLabel = metric === "recent" ? "avg" : metric === "projected" ? "proj" : "pts";
+  const weekNote = metric === "recent" ? ` (weeks ${d.weeksToFetch[0]}-${d.weeksToFetch[d.weeksToFetch.length-1]})`
+                  : metric === "projected" ? ` (week ${d.currentWeek})` : "";
+
+  d.positions.forEach(pos => {
+    const myIds = (myRoster.players || []).filter(id => {
+      const p = PLAYERS ? PLAYERS[id] : null;
+      const fp = (p && (p.fantasy_positions?.[0] || p.position)) || null;
+      return fp === pos;
+    });
+    const myPlayers = myIds.map(id => {
+      let pts;
+      if (metric === "season") {
+        pts = computeLeaguePoints(STATE.playerSeasonStats[id], data.league.scoring_settings);
+      } else {
+        const entry = d.myMetricCache[id];
+        pts = entry ? waiverMetricPoints(entry.stats, entry.weeks, metric, data.league.scoring_settings) : null;
+      }
+      return { id, name: playerName(PLAYERS ? PLAYERS[id] : null, id), pts: pts === null ? 0 : pts, hasData: pts !== null };
+    }).sort((a, b) => b.pts - a.pts);
+
+    const requiredStarters = (data.league.roster_positions || []).filter(s => s === pos).length;
+
+    const pool = d.poolByPos[pos] || [];
+    const freeAgents = pool.map(row => {
+      const pid = row.player_id || row.playerId;
+      if (!pid || allRostered.has(pid)) return null;
+      const pl = PLAYERS ? PLAYERS[pid] : null;
+      const pts = metric === "season"
+        ? computeLeaguePoints(row, data.league.scoring_settings)
+        : waiverMetricPoints(row.stats, row.weeks, metric, data.league.scoring_settings);
+      if (pts === null) return null;
+      return { id: pid, name: playerName(pl, pid), team: pl?.team || "", pts };
+    }).filter(Boolean).sort((a, b) => b.pts - a.pts).slice(0, 8);
+
+    const bestFA = freeAgents[0];
+    const worstMine = myPlayers[myPlayers.length - 1];
+    const dropCandidate = (bestFA && worstMine && worstMine.hasData && bestFA.pts > worstMine.pts)
+      ? { mine: worstMine, replacement: bestFA } : null;
+
+    const panel = document.createElement("div");
+    panel.className = "panel";
+    panel.style.padding = "14px";
+    panel.style.marginTop = "14px";
+    panel.innerHTML = `
+      <div class="row" style="justify-content:space-between;">
+        <span style="font-weight:800; font-size:14px; color:var(--gold);">${pos}</span>
+        <span class="muted mono" style="font-size:10.5px;">${myIds.length} rostered - ${requiredStarters} starter slot${requiredStarters===1?"":"s"}</span>
+      </div>
+      ${myPlayers.length ? `
+        <div style="margin-top:8px;">
+          ${myPlayers.map(p => `<div class="prow" style="justify-content:space-between;"><span class="pname">${escapeHtml(p.name)}</span><span class="mono">${p.hasData ? p.pts.toFixed(1) : "-"}</span></div>`).join("")}
+        </div>` : `<div class="muted" style="font-size:11.5px; margin-top:8px;">None rostered.</div>`}
+      ${dropCandidate ? `
+        <div style="margin-top:10px; padding:8px; border-radius:6px; background:rgba(193,80,63,0.08); border:1px solid rgba(193,80,63,0.3);">
+          <span style="font-size:11px;">Consider dropping <strong>${escapeHtml(dropCandidate.mine.name)}</strong> (${dropCandidate.mine.pts.toFixed(1)} ${metricLabel}) - <strong>${escapeHtml(dropCandidate.replacement.name)}</strong> is available with ${dropCandidate.replacement.pts.toFixed(1)} ${metricLabel}${weekNote}.</span>
+        </div>` : ""}
+      <div class="rcard-section-label" style="margin-top:12px;">Top free agents (${metricLabel}${weekNote})</div>
+      ${freeAgents.length ? freeAgents.map(fa => {
+        const inList = targetsList.some(t => t.playerId === fa.id && t.leagueId === d.leagueId);
+        const isReplacement = dropCandidate && dropCandidate.replacement.id === fa.id;
+        const bid = suggestFaabBid(fa.pts, bestFA.pts, isReplacement, d.remainingBudget);
+        return `<div class="prow" style="justify-content:space-between; flex-wrap:wrap;">
+          <span class="pname">${escapeHtml(fa.name)} ${fa.team ? `<span class="muted mono" style="font-size:10px;">${escapeHtml(fa.team)}</span>` : ""}</span>
+          <span class="row" style="gap:6px;">
+            <span class="mono">${fa.pts.toFixed(1)}</span>
+            ${bid !== null ? `<span class="pbadge" style="background:var(--gold);">$${bid}</span>` : ""}
+            <button class="btn btn-sm ${inList?'btn-danger':'btn-primary'}" style="padding:2px 8px; font-size:10.5px;" onclick="${inList ? `removeWaiverTarget('${fa.id}','${d.leagueId}')` : `addWaiverTarget('${fa.id}','${d.leagueId}')`}">${inList ? "Remove" : "+ Target"}</button>
+          </span>
+        </div>`;
+      }).join("") : `<div class="muted" style="font-size:11.5px;">No free agents found with scored stats.</div>`}
+    `;
+    wrap.appendChild(panel);
+  });
+
+  // Persistent targets list across all leagues
+  if (targetsList.length > 0) {
+    wrap.appendChild(el(`<div style="font-weight:700; margin:18px 0 8px;">Your Waiver Targets</div>`));
+    const listPanel = document.createElement("div");
+    listPanel.className = "panel";
+    listPanel.style.padding = "14px";
+    listPanel.innerHTML = targetsList.map(t => {
+      const l = getLeagues().find(x => x.id === t.leagueId);
+      const p = PLAYERS ? PLAYERS[t.playerId] : null;
+      const badge = badgeInfo(p);
+      return `<div class="prow" style="justify-content:space-between;">
+        <span class="pname">${escapeHtml(playerName(p, t.playerId))} <span class="pbadge" style="background:${badge.color}">${badge.label}</span> <span class="muted">(${escapeHtml(l ? l.nickname : "?")})</span></span>
+        <button class="btn btn-sm btn-danger" onclick="removeWaiverTarget('${t.playerId}','${t.leagueId}')">Remove</button>
+      </div>`;
+    }).join("");
+    wrap.appendChild(listPanel);
+  }
+
+  return wrap;
+}
+
+
+function finderResultsHtml() {
+  const q = (STATE.finderQuery || "").trim().toLowerCase();
+  if (!q) {
+    return `<div class="empty-state"><p>Type a name to see who owns them across your leagues.</p></div>`;
+  }
+  if (q.length < 3) {
+    return `<div class="empty-state"><p>Keep typing - need at least 3 letters to search the full player list.</p></div>`;
+  }
+  if (!PLAYERS) {
+    return `<div class="empty-state"><p>Loading player database...</p></div>`;
+  }
+
+  const leagues = getLeagues().filter(l => l.source !== "manual" && !isDismissedByMe(l) && getLeagueData(l.id));
+
+  // Build ownership first: playerId -> hits[]
+  const ownershipByPlayer = {};
+  leagues.forEach(l => {
+    const data = getLeagueData(l.id);
+    data.rosters.forEach(r => {
+      (r.players || []).forEach(id => {
+        if (!ownershipByPlayer[id]) ownershipByPlayer[id] = [];
+        ownershipByPlayer[id].push({
+          leagueId: l.id, leagueName: l.nickname, teamName: teamLabel(r, data.users),
+          status: (r.starters || []).includes(id) ? "Starter" : "Bench",
+        });
+      });
+    });
+  });
+
+  // Search the whole player database, not just rostered players, so a
+  // player who's a free agent everywhere still shows up.
+  const matchIds = [];
+  for (const id in PLAYERS) {
+    if (playerName(PLAYERS[id], id).toLowerCase().includes(q)) matchIds.push(id);
+  }
+  if (matchIds.length === 0) {
+    return `<div class="empty-state"><p>No players match "${escapeHtml(STATE.finderQuery)}".</p></div>`;
+  }
+  const capped = matchIds.slice(0, 40);
+  const watchlist = getFinderWatchlist();
+
+  return capped.map(id => {
+    const p = PLAYERS[id];
+    const badge = badgeInfo(p);
+    const hits = ownershipByPlayer[id] || [];
+    const ownedLeagueIds = new Set(hits.map(h => h.leagueId));
+    const inList = watchlist.includes(id);
+    const statsObj = STATE.showFinderPoints ? STATE.playerSeasonStats[id] : undefined;
+    const hitRows = hits.map(h => {
+      let pointsText = "";
+      if (STATE.showFinderPoints) {
+        if (statsObj === null) pointsText = ` - stats unavailable`;
+        else if (statsObj) {
+          const hd = getLeagueData(h.leagueId);
+          const pts = hd ? computeLeaguePoints(statsObj, hd.league.scoring_settings) : null;
+          pointsText = pts !== null ? ` - ${pts.toFixed(1)} pts (2025)` : "";
+        }
+      }
+      return `<div class="finder-hit"><span>${escapeHtml(h.leagueName)} - ${escapeHtml(h.teamName)}${pointsText}</span><span class="muted">${h.status}</span></div>`;
+    }).join("");
+    return `
+      <div class="finder-result">
+        <div class="row" style="justify-content:space-between;">
+          <span class="finder-player-name">${escapeHtml(playerName(p, id))}</span>
+          <div class="row">
+            <span class="pbadge" style="background:${badge.color}">${badge.label}</span>
+            <button class="btn btn-sm ${inList?'btn-danger':'btn-primary'}" onclick="${inList ? `removeFromFinderWatchlist('${id}')` : `addToFinderWatchlist('${id}')`}">${inList ? "Remove" : "+ Add"}</button>
+          </div>
+        </div>
+        ${hitRows || '<div class="muted" style="font-size:12px; margin-top:6px;">Not rostered in any saved league.</div>'}
+        ${freeAgentLeaguesHtml(id, ownedLeagueIds)}
+      </div>`;
+  }).join("");
+}
+
+/* =========================================================
+   RENDER: MATCHUPS
+========================================================= */
+function renderMatchups() {
+  const wrap = document.createElement("div");
+  const week = STATE.matchupWeek;
+  wrap.appendChild(el(`
+    <div class="row" style="margin-top:16px; justify-content:space-between;">
+      <div class="row">
+        <span class="muted" style="font-size:12px;">Week</span>
+        <select onchange="loadMatchups(parseInt(this.value))">
+          ${Array.from({length:18},(_,i)=>i+1).map(w=>`<option value="${w}" ${w===week?"selected":""}>${w}</option>`).join("")}
+        </select>
+        <button class="btn btn-sm ${!STATE.matchupsMyOnly?'btn-primary':''}" onclick="setMatchupsMyOnly(false)">All matchups</button>
+        <button class="btn btn-sm ${STATE.matchupsMyOnly?'btn-primary':''}" onclick="setMatchupsMyOnly(true)">My matchups</button>
+      </div>
+      <button class="btn btn-sm" onclick="loadMatchups(${week||1})" ${STATE.loading?"disabled":""}>
+        ${STATE.loading ? '<span class="spinner"></span>' : ''} Refresh
+      </button>
+    </div>
+  `));
+
+  const leagues = getLeagues().filter(l => !isDismissedByMe(l));
+  if (leagues.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Add a league first.</p></div>`));
+    return wrap;
+  }
+
+  let anyShown = false;
+  leagues.forEach(l => {
+    const data = getLeagueData(l.id);
+    if (!data) return;
+    const matchups = (STATE.matchupsCache && STATE.matchupsCache[l.id]) || [];
+    const groups = {};
+    matchups.forEach(m => { (groups[m.matchup_id] = groups[m.matchup_id] || []).push(m); });
+    let pairs = Object.values(groups);
+
+    if (STATE.matchupsMyOnly) {
+      const myRosterId = myTeamFor(l);
+      if (!myRosterId) return; // no team set here, nothing to show in "my only" mode
+      pairs = pairs.filter(pair => pair.some(m => String(m.roster_id) === String(myRosterId)));
+      if (pairs.length === 0) return; // bye week or not synced yet for this league
+    }
+
+    anyShown = true;
+    wrap.appendChild(el(`<div style="font-weight:700; margin:18px 0 8px;">${escapeHtml(l.nickname)}</div>`));
+    const grid = document.createElement("div");
+    grid.className = "roster-grid";
+    if (pairs.length === 0) {
+      grid.appendChild(el(`<div class="muted" style="font-size:12px;">No matchup data for week ${week || "?"} yet.</div>`));
+    } else {
+      pairs.forEach(pair => {
+        const [a, b] = pair;
+        const rosterA = data.rosters.find(r => r.roster_id === a.roster_id);
+        const rosterB = b ? data.rosters.find(r => r.roster_id === b.roster_id) : null;
+        const myRosterId = myTeamFor(l);
+        const isMine = !!myRosterId && (String(a.roster_id) === String(myRosterId) || (b && String(b.roster_id) === String(myRosterId)));
+        grid.appendChild(el(matchupCardHtml(a, rosterA, b, rosterB, data.users, isMine, l.id, week)));
+      });
+    }
+    wrap.appendChild(grid);
+  });
+
+  if (!anyShown) {
+    wrap.appendChild(el(`<div class="empty-state"><p>${STATE.matchupsMyOnly ? 'No teams set yet, or no matchup data loaded for week ' + (week || '?') + '.' : 'No matchup data for this week yet.'}</p></div>`));
+  }
+
+  return wrap;
+}
+function matchupCardHtml(a, rosterA, b, rosterB, users, isMine, leagueId, week) {
+  const nameA = rosterA ? teamLabel(rosterA, users) : `Roster ${a.roster_id}`;
+  const nameB = rosterB ? teamLabel(rosterB, users) : (b ? `Roster ${b.roster_id}` : "Bye");
+  const ptsA = (a.points || 0).toFixed(2);
+  const ptsB = b ? (b.points || 0).toFixed(2) : "-";
+  const diff = b ? Math.abs((a.points || 0) - (b.points || 0)) : null;
+  const highlightStyle = isMine ? "border-color: var(--gold); background: rgba(215,165,62,0.06);" : "";
+  const clickAttr = b ? `onclick="viewMatchupDetail('${leagueId}', ${week}, ${a.matchup_id})" style="${highlightStyle} cursor:pointer;"` : `style="${highlightStyle}"`;
+  return `
+    <div class="rcard" ${clickAttr}>
+      ${isMine ? '<span class="pbadge" style="background:var(--gold); margin-bottom:6px; display:inline-block;">MY GAME</span>' : ""}
+      <div class="prow" style="justify-content:space-between;"><span class="pname" style="font-weight:600;">${escapeHtml(nameA)}</span><span class="mono" style="font-weight:800;">${ptsA}</span></div>
+      <div class="prow" style="justify-content:space-between;"><span class="pname" style="font-weight:600;">${escapeHtml(nameB)}</span><span class="mono" style="font-weight:800;">${ptsB}</span></div>
+      ${diff !== null ? `<div class="muted mono" style="font-size:11px; margin-top:6px;">Margin: ${diff.toFixed(2)}</div>` : ""}
+      ${b ? `<div class="muted" style="font-size:10px; margin-top:4px;">Click for boxscore &gt;</div>` : ""}
+    </div>`;
+}
+
+/* =========================================================
+   RENDER: MATCHUP DETAIL (boxscore, beta actual/projected)
+========================================================= */
+function nflGameInfo(team, week) {
+  if (!team) return "";
+  if (!STATE.nflSchedule) return `(${team})`;
+  const game = STATE.nflSchedule.find(g => g.week === week && (g.home === team || g.away === team));
+  if (!game) return `(${team})`;
+  const opp = game.home === team ? game.away : game.home;
+  const prefix = game.home === team ? "vs." : "@";
+  let dateText = "";
+  if (game.date) {
+    const d = new Date(game.date);
+    if (!isNaN(d.getTime())) {
+      dateText = d.toLocaleDateString([], { weekday: "short" });
+      if (game.date.includes("T") || game.date.includes(":")) {
+        dateText += " " + d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      }
+    }
+  }
+  return `(${team}) ${prefix} ${opp}${dateText ? " " + dateText : ""}`;
+}
+
+function playerStatusBadge(p) {
+  const status = p && p.injury_status;
+  if (!status) return "";
+  const color = status === "Out" || status === "IR" ? "var(--loss)" : "var(--gold)";
+  return `<span class="pbadge" style="background:${color};">${escapeHtml(status)}</span>`;
+}
+
+const STAT_LABELS = {
+  pass_cmp: "CMP", pass_att: "ATT", pass_yd: "PASS YD", pass_td: "PASS TD", pass_int: "INT",
+  rush_att: "CAR", rush_yd: "RUSH YD", rush_td: "RUSH TD",
+  rec: "REC", rec_tgt: "TGT", rec_yd: "REC YD", rec_td: "REC TD",
+  fum_lost: "FUM LOST",
+  idp_tkl_solo: "TKL", idp_tkl_ast: "AST", idp_tkl: "TKL", idp_sack: "SACK",
+  idp_int: "INT", idp_pd: "PD", idp_ff: "FF", idp_fum_rec: "FR", idp_safety: "SAFETY", idp_blk_kick: "BLK",
+  fgm: "FG", fga: "FGA", xpm: "XP", xpa: "XPA",
+  def_td: "DEF TD", def_int: "INT", def_sack: "SACK", def_safety: "SAFETY", st_td: "ST TD",
+};
+const STAT_LABEL_ORDER = [
+  "pass_cmp","pass_att","pass_yd","pass_td","pass_int",
+  "rush_att","rush_yd","rush_td",
+  "rec","rec_tgt","rec_yd","rec_td",
+  "fum_lost",
+  "idp_tkl_solo","idp_tkl_ast","idp_tkl","idp_sack","idp_int","idp_pd","idp_ff","idp_fum_rec","idp_safety","idp_blk_kick",
+  "fgm","fga","xpm","xpa",
+  "def_td","def_int","def_sack","def_safety","st_td",
+];
+function formatStatLine(statsObj) {
+  if (!statsObj) return "";
+  const stats = statsObj.stats || statsObj;
+  if (!stats || typeof stats !== "object") return "";
+  const parts = [];
+  STAT_LABEL_ORDER.forEach(key => {
+    if (typeof stats[key] === "number" && stats[key] !== 0) {
+      parts.push(`${stats[key]} ${STAT_LABELS[key]}`);
+    }
+  });
+  return parts.join(" \u00b7 ");
+}
+
+function statBreakdownTableHtml(statsObj, scoring) {
+  const stats = statsObj && (statsObj.stats || statsObj);
+  if (!stats || typeof stats !== "object" || !scoring) {
+    return `<div class="muted" style="font-size:12px;">No data available.</div>`;
+  }
+  const rows = [];
+  let total = 0;
+  for (const key in scoring) {
+    if (typeof stats[key] === "number" && stats[key] !== 0) {
+      const weight = scoring[key];
+      const pts = stats[key] * weight;
+      total += pts;
+      const label = STAT_LABELS[key] || key.replace(/_/g, " ").toUpperCase();
+      rows.push({ label, value: stats[key], weight, pts });
+    }
+  }
+  if (rows.length === 0) {
+    return `<div class="muted" style="font-size:12px;">No scored stats yet.</div>`;
+  }
+  return `
+    <table>
+      <thead><tr><th>Stat</th><th class="num">Value</th><th class="num">Weight</th><th class="num">Pts</th></tr></thead>
+      <tbody>
+        ${rows.map(r => `<tr><td>${escapeHtml(r.label)}</td><td class="num mono">${r.value}</td><td class="num mono">${r.weight}</td><td class="num mono">${r.pts.toFixed(2)}</td></tr>`).join("")}
+        <tr style="border-top:2px solid var(--line);"><td style="font-weight:800;">Total</td><td></td><td></td><td class="num mono" style="font-weight:800;">${total.toFixed(2)}</td></tr>
+      </tbody>
+    </table>`;
+}
+
+window.showStatBreakdown = function (playerId, week) {
+  const pl = PLAYERS ? PLAYERS[playerId] : null;
+  const key = `${playerId}-${week}`;
+  const entry = STATE.matchupPlayerPoints ? STATE.matchupPlayerPoints[key] : null;
+  const scoring = STATE.matchupDetailScoring;
+  const modalRoot = document.getElementById("modal-root");
+  if (!modalRoot) return;
+  modalRoot.innerHTML = `
+    <div style="position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:1000; display:flex; align-items:center; justify-content:center; padding:16px;" onclick="if(event.target===this) closeStatModal()">
+      <div class="panel" style="padding:16px; max-width:380px; width:100%; max-height:80vh; overflow-y:auto;">
+        <div class="row" style="justify-content:space-between; margin-bottom:10px;">
+          <span style="font-weight:800; font-size:14px;">${escapeHtml(playerName(pl, playerId))}</span>
+          <button class="btn btn-sm" onclick="closeStatModal()">Close</button>
+        </div>
+        <div style="font-size:11px; font-weight:700; color:var(--text-faint); letter-spacing:0.06em; margin-bottom:4px;">ACTUAL</div>
+        ${statBreakdownTableHtml(entry && entry.stat, scoring)}
+        <div style="font-size:11px; font-weight:700; color:var(--text-faint); letter-spacing:0.06em; margin:14px 0 4px;">PROJECTED</div>
+        ${statBreakdownTableHtml(entry && entry.proj, scoring)}
+      </div>
+    </div>`;
+};
+window.closeStatModal = function () {
+  const modalRoot = document.getElementById("modal-root");
+  if (modalRoot) modalRoot.innerHTML = "";
+};
+
+function matchupPlayerMeta(pid, week) {
+  const pl = PLAYERS ? PLAYERS[pid] : null;
+  const badge = badgeInfo(pl);
+  const game = nflGameInfo(pl?.team, week);
+  const key = `${pid}-${week}`;
+  const entry = STATE.matchupPlayerPoints ? STATE.matchupPlayerPoints[key] : undefined;
+  let actual = "-", proj = "-", statLine = "";
+  if (entry) {
+    const ap = STATE.matchupDetailScoring ? computeLeaguePoints(entry.stat, STATE.matchupDetailScoring) : null;
+    const pp = STATE.matchupDetailScoring ? computeLeaguePoints(entry.proj, STATE.matchupDetailScoring) : null;
+    if (ap !== null) actual = ap.toFixed(1);
+    if (pp !== null) proj = pp.toFixed(1);
+    statLine = formatStatLine(entry.stat);
+  }
+  return { pl, badge, game, actual, proj, statusHtml: playerStatusBadge(pl), statLine };
+}
+
+function matchupSlotRowHtml(pidA, pidB, slotLabel, week) {
+  const cell = (pid) => {
+    if (!pid || pid === "0") return { id: null, name: "Empty", meta: "", actual: "", proj: "", statusHtml: "", statLine: "" };
+    const m = matchupPlayerMeta(pid, week);
+    return { id: pid, name: playerName(m.pl, pid), meta: m.game, actual: m.actual, proj: m.proj, statusHtml: m.statusHtml, statLine: m.statLine };
+  };
+  const A = cell(pidA);
+  const B = pidB !== undefined ? cell(pidB) : { id: null, name: "", meta: "", actual: "", proj: "", statusHtml: "", statLine: "" };
+  const clickA = A.id ? `onclick="showStatBreakdown('${A.id}', ${week})" style="cursor:pointer;"` : "";
+  const clickB = B.id ? `onclick="showStatBreakdown('${B.id}', ${week})" style="cursor:pointer;"` : "";
+
+  const statRow = (A.statLine || B.statLine) ? `
+      <div class="mu-statline" style="grid-column:1 / 3; grid-row:3; text-align:left;">${escapeHtml(A.statLine)}</div>
+      <div class="mu-statline" style="grid-column:4 / 6; grid-row:3; text-align:right;">${escapeHtml(B.statLine)}</div>` : "";
+
+  return `
+    <div class="mu-slot-row">
+      <div class="mu-name" style="grid-column:1; grid-row:1; text-align:left;">${escapeHtml(A.name)} ${A.statusHtml}</div>
+      <div class="mu-score" ${clickA} style="grid-column:2; grid-row:1; text-align:right;">${A.actual}</div>
+      <div class="mu-slot-label" style="grid-column:3; grid-row:1 / 3;">${slotLabel}</div>
+      <div class="mu-score" ${clickB} style="grid-column:4; grid-row:1; text-align:left;">${B.actual}</div>
+      <div class="mu-name" style="grid-column:5; grid-row:1; text-align:right;">${B.statusHtml} ${escapeHtml(B.name)}</div>
+      <div class="mu-meta" style="grid-column:1; grid-row:2; text-align:left;">${escapeHtml(A.meta)}</div>
+      <div class="mu-score-sub" style="grid-column:2; grid-row:2; text-align:right;">${A.proj}</div>
+      <div class="mu-score-sub" style="grid-column:4; grid-row:2; text-align:left;">${B.proj}</div>
+      <div class="mu-meta" style="grid-column:5; grid-row:2; text-align:right;">${escapeHtml(B.meta)}</div>
+      ${statRow}
+    </div>`;
+}
+
+function renderMatchupDetail() {
+  const wrap = document.createElement("div");
+  const leagueId = STATE.matchupDetailLeagueId;
+  const week = STATE.matchupDetailWeek;
+  const league = getLeagues().find(l => l.id === leagueId);
+  const data = getLeagueData(leagueId);
+  const pair = STATE.matchupDetailPair || [];
+
+  wrap.appendChild(el(`
+    <div class="row" style="margin-top:16px; justify-content:space-between;">
+      <span style="font-weight:700;">${escapeHtml(league?.nickname || "")} - Week ${week}</span>
+      <button class="btn btn-sm" onclick="navigate('matchups')">Back to Matchups</button>
+    </div>
+    <div class="muted" style="font-size:10.5px; margin-top:4px;">Points, game info, and status use unofficial Sleeper endpoints - beta, may show "-" if unavailable</div>
+  `));
+
+  if (pair.length === 0 || !data) {
+    wrap.appendChild(el(`<div class="empty-state"><p>No matchup data available.</p></div>`));
+    return wrap;
+  }
+
+  const [sideA, sideB] = pair;
+  const rosterA = data.rosters.find(r => r.roster_id === sideA.roster_id);
+  const rosterB = sideB ? data.rosters.find(r => r.roster_id === sideB.roster_id) : null;
+  STATE.matchupDetailScoring = data.league.scoring_settings;
+  const slots = starterSlots(data.league);
+
+  const panel = document.createElement("div");
+  panel.className = "panel";
+  panel.style.padding = "14px";
+  panel.style.marginTop = "14px";
+
+  let html = `
+    <div style="display:grid; grid-template-columns: 1fr auto auto 1fr; gap:8px; align-items:center; margin-bottom:6px;">
+      <span style="font-weight:800; font-size:16px; color:var(--gold); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(rosterA ? teamLabel(rosterA, data.users) : "Roster " + sideA.roster_id)}</span>
+      <span class="mono" style="font-weight:800; font-size:16px;">${(sideA.points||0).toFixed(2)}</span>
+      <span class="mono" style="font-weight:800; font-size:16px;">${sideB ? (sideB.points||0).toFixed(2) : "-"}</span>
+      <span style="font-weight:800; font-size:16px; color:var(--gold); text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${sideB ? escapeHtml(rosterB ? teamLabel(rosterB, data.users) : "Roster " + sideB.roster_id) : "Bye"}</span>
+    </div>`;
+
+  (sideA.starters || []).forEach((pidA, idx) => {
+    const pidB = sideB ? (sideB.starters || [])[idx] : undefined;
+    const slotLabel = slots[idx] ? formatSlotLabel(slots[idx]) : "";
+    html += matchupSlotRowHtml(pidA, pidB, slotLabel, week);
+  });
+
+  panel.innerHTML = html;
+  wrap.appendChild(panel);
+
+  // Bench and IR - same mirrored row format, paired by index (not by position)
+  const benchOf = (side, roster) => {
+    if (!side) return [];
+    const starters = side.starters || [];
+    const reserve = (roster && roster.reserve) || [];
+    return (side.players || []).filter(id => !starters.includes(id) && !reserve.includes(id));
+  };
+  const irOf = (roster) => (roster && roster.reserve) || [];
+
+  const benchA = benchOf(sideA, rosterA), benchB = benchOf(sideB, rosterB);
+  const irA = irOf(rosterA), irB = irOf(rosterB);
+
+  if (benchA.length || benchB.length) {
+    wrap.appendChild(el(`<div style="font-weight:700; margin:16px 0 8px;">Bench</div>`));
+    const benchPanel = document.createElement("div");
+    benchPanel.className = "panel";
+    benchPanel.style.padding = "14px";
+    let bh = "";
+    const maxLen = Math.max(benchA.length, benchB.length);
+    for (let i = 0; i < maxLen; i++) {
+      bh += matchupSlotRowHtml(benchA[i], benchB[i], "BE", week);
+    }
+    benchPanel.innerHTML = bh;
+    wrap.appendChild(benchPanel);
+  }
+
+  if (irA.length || irB.length) {
+    wrap.appendChild(el(`<div style="font-weight:700; margin:16px 0 8px;">IR</div>`));
+    const irPanel = document.createElement("div");
+    irPanel.className = "panel";
+    irPanel.style.padding = "14px";
+    let ih = "";
+    const maxLen = Math.max(irA.length, irB.length);
+    for (let i = 0; i < maxLen; i++) {
+      ih += matchupSlotRowHtml(irA[i], irB[i], "IR", week);
+    }
+    irPanel.innerHTML = ih;
+    wrap.appendChild(irPanel);
+  }
+
+  return wrap;
+}
+
+/* =========================================================
+   RENDER: TRENDING (league-wide, all of Sleeper)
+========================================================= */
+function renderTrending() {
+  const wrap = document.createElement("div");
+  wrap.appendChild(el(`
+    <div class="row" style="margin-top:16px; justify-content:space-between;">
+      <div class="row">
+        <button class="btn btn-sm ${STATE.trendingType==='add'?'btn-primary':''}" onclick="loadTrending('add')">Trending Adds</button>
+        <button class="btn btn-sm ${STATE.trendingType==='drop'?'btn-primary':''}" onclick="loadTrending('drop')">Trending Drops</button>
+      </div>
+      <span class="muted" style="font-size:11px;">Last 24h, all of Sleeper</span>
+    </div>
+  `));
+
+  if (STATE.loading || !STATE.trending) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Loading trending players...</p></div>`));
+    return wrap;
+  }
+
+  const relevantLeagues = getLeagues().filter(l => l.source !== "manual" && !isDismissedByMe(l));
+
+  const panel = document.createElement("div");
+  panel.className = "panel";
+  panel.innerHTML = `
+    <table>
+      <thead><tr><th style="width:32px;">#</th><th>Player</th><th class="num">${STATE.trendingType==='add'?'Adds':'Drops'}</th></tr></thead>
+      <tbody>
+        ${STATE.trending.map((r,i) => {
+          const p = PLAYERS ? PLAYERS[r.player_id] : null;
+          const badge = badgeInfo(p);
+          const availableIn = relevantLeagues.filter(l => {
+            const data = getLeagueData(l.id);
+            if (!data) return false;
+            return !data.rosters.some(ro => (ro.players || []).includes(r.player_id));
+          }).map(l => l.nickname);
+          return `<tr>
+            <td class="rank">${i+1}</td>
+            <td>
+              ${escapeHtml(playerName(p, r.player_id))} <span class="pbadge" style="background:${badge.color}">${badge.label}</span>
+              ${availableIn.length ? `<div class="muted" style="font-size:10px; margin-top:2px;">Free agent in: ${availableIn.map(n => escapeHtml(n)).join(", ")}</div>` : ""}
+            </td>
+            <td class="num mono">${r.count}</td>
+          </tr>`;
+        }).join("")}
+      </tbody>
+    </table>`;
+  wrap.appendChild(panel);
+  return wrap;
+}
+
+/* =========================================================
+   RENDER: TRANSACTIONS
+========================================================= */
+function waiverInfoHtml(league) {
+  const data = getLeagueData(league.id);
+  if (!data) return "";
+  const s = data.league.settings || {};
+  const parts = [];
+  const myRosterId = myTeamFor(league);
+  if (s.waiver_budget) {
+    const myRoster = myRosterId ? data.rosters.find(r => String(r.roster_id) === String(myRosterId)) : null;
+    if (myRoster) {
+      const used = (myRoster.settings && myRoster.settings.waiver_budget_used) || 0;
+      parts.push(`Current FAAB $${s.waiver_budget - used}`);
+    } else {
+      parts.push(`FAAB budget $${s.waiver_budget} (set "My team" to see your remaining)`);
+    }
+  }
+  if (s.trade_deadline) parts.push(`Trade deadline Week ${s.trade_deadline}`);
+
+  const days = league.waiverDays || [];
+  const suggestion = (!days.length && league.source !== "manual") ? suggestWaiverScheduleFromSleeper(data.league) : null;
+  const nextRun = fmtNextRun(nextWaiverRun(league));
+
+  return `
+    <div style="padding:8px 0; border-top:1px solid var(--line);">
+      <div style="font-size:11.5px;">
+        <span style="font-weight:700;">${escapeHtml(league.nickname)}</span>
+        ${parts.length ? `<span class="muted"> - ${parts.join(" | ")}</span>` : ""}
+      </div>
+      ${nextRun ? `<div style="font-size:11.5px; color:var(--gold); font-weight:700; margin-top:2px;">Next waiver run: ${nextRun}</div>` : ""}
+      ${suggestion ? `
+        <div class="muted" style="font-size:11px; margin-top:5px;">
+          Sleeper says this league runs daily waivers${suggestion.time ? ` around ${suggestion.time}` : ""}.
+          <button class="btn btn-sm" style="padding:2px 8px; font-size:10.5px;" onclick="applyWaiverSuggestion('${league.id}', ${suggestion.time ? `'${suggestion.time}'` : "null"})">Use this</button>
+        </div>` : ""}
+      <div class="row" style="margin-top:6px; gap:4px; flex-wrap:wrap;">
+        ${WAIVER_DAY_LABELS.map((label, idx) => `
+          <button class="btn btn-sm ${days.includes(idx) ? "btn-primary" : ""}" style="padding:3px 8px; font-size:10.5px;" onclick="toggleWaiverDay('${league.id}', ${idx})">${label}</button>
+        `).join("")}
+        <button class="btn btn-sm" style="padding:3px 8px; font-size:10.5px;" onclick="setWaiverDaily('${league.id}')">Daily</button>
+      </div>
+      <div class="row" style="margin-top:6px; gap:6px;">
+        <input id="waiver-time-${league.id}" type="time" value="${escapeHtml(league.waiverTime || "")}" style="font-size:11.5px; padding:5px 8px;" onchange="setWaiverTime('${league.id}', this.value)" />
+        <span class="muted" style="font-size:10px;">your local time</span>
+      </div>
+    </div>`;
+}
+
+async function persistWaiverField(leagueId, patch) {
+  const leagues = getLeagues();
+  const l = leagues.find(x => x.id === leagueId);
+  if (!l) return;
+  Object.assign(l, patch);
+  saveLeagues(leagues);
+  if (getCloudConfig()) {
+    try { await cloudUpsertLeague(l); } catch (e) { console.error("Cloud push failed", e); }
+  }
+  render();
+}
+
+window.toggleWaiverDay = function (leagueId, dayIdx) {
+  const l = getLeagues().find(x => x.id === leagueId);
+  const current = (l && l.waiverDays) || [];
+  const next = current.includes(dayIdx) ? current.filter(d => d !== dayIdx) : current.concat(dayIdx).sort();
+  persistWaiverField(leagueId, { waiverDays: next, waiverDaily: next.length === 7 });
+};
+window.setWaiverDaily = function (leagueId) {
+  persistWaiverField(leagueId, { waiverDays: [0,1,2,3,4,5,6], waiverDaily: true });
+};
+window.setWaiverTime = function (leagueId, value) {
+  persistWaiverField(leagueId, { waiverTime: value });
+};
+window.applyWaiverSuggestion = function (leagueId, time) {
+  persistWaiverField(leagueId, { waiverDays: [0,1,2,3,4,5,6], waiverDaily: true, waiverTime: time || "" });
+};
+
+function renderTransactions() {
+  const wrap = document.createElement("div");
+  const relevantLeagues = getLeagues().filter(l => l.source !== "manual" && !isDismissedByMe(l) && getLeagueData(l.id));
+
+  wrap.appendChild(el(`
+    <div class="row" style="margin-top:16px; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+      <span class="muted" style="font-size:12px;">${STATE.transactionsWide ? "Last 60 days" : "Last 2 weeks"}, all saved leagues</span>
+      <button class="btn btn-sm" onclick="loadTransactions()" ${STATE.loading?"disabled":""}>
+        ${STATE.loading ? '<span class="spinner"></span>' : ''} Refresh
+      </button>
+    </div>
+  `));
+
+  if (relevantLeagues.length > 0) {
+    const panel = document.createElement("div");
+    panel.className = "panel";
+    panel.style.padding = "10px 14px";
+    panel.innerHTML = `
+      <div class="muted" style="font-size:10px; letter-spacing:0.08em; font-weight:700; margin-bottom:2px;">WAIVER INFO</div>
+      ${relevantLeagues.map(l => waiverInfoHtml(l)).join("")}
+    `;
+    wrap.appendChild(panel);
+    wrap.appendChild(el(`<div style="margin-top:14px;"></div>`));
+  }
+
+  if (STATE.loading || !STATE.transactions) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Loading transactions...</p></div>`));
+    return wrap;
+  }
+
+  wrap.appendChild(el(`
+    <div class="row" style="margin-bottom:12px;">
+      <select onchange="setTxLeagueFilter(this.value)">
+        <option value="all" ${STATE.transactionsLeagueFilter==='all'?"selected":""}>All leagues</option>
+        ${relevantLeagues.map(l => `<option value="${l.id}" ${STATE.transactionsLeagueFilter===l.id?"selected":""}>${escapeHtml(l.nickname)}</option>`).join("")}
+      </select>
+      <select onchange="setTxTypeFilter(this.value)">
+        <option value="all" ${STATE.transactionsTypeFilter==='all'?"selected":""}>All types</option>
+        <option value="waiver" ${STATE.transactionsTypeFilter==='waiver'?"selected":""}>Waiver</option>
+        <option value="free_agent" ${STATE.transactionsTypeFilter==='free_agent'?"selected":""}>Free agent</option>
+        <option value="trade" ${STATE.transactionsTypeFilter==='trade'?"selected":""}>Trade</option>
+      </select>
+    </div>
+  `));
+
+  const filtered = STATE.transactions.filter(t =>
+    (STATE.transactionsLeagueFilter === "all" || t.leagueId === STATE.transactionsLeagueFilter) &&
+    (STATE.transactionsTypeFilter === "all" || t.type === STATE.transactionsTypeFilter)
+  );
+
+  if (filtered.length === 0) {
+    if (STATE.transactions.length === 0) {
+      wrap.appendChild(el(`
+        <div class="empty-state">
+          <p>${STATE.transactionsWide ? "No transactions found in the last 60 days." : "No transactions found in the last 2 weeks."}</p>
+          <p class="muted">This can be normal during the offseason or a quiet stretch. ${STATE.transactionsWide ? "" : 'Check further back to confirm nothing\'s being missed.'}</p>
+          ${!STATE.transactionsWide ? `<button class="btn btn-sm btn-primary" style="margin-top:8px;" onclick="loadTransactions(true)">Check last 60 days</button>` : ""}
+        </div>
+      `));
+    } else {
+      wrap.appendChild(el(`<div class="empty-state"><p>No transactions match that filter - try "All leagues" or "All types".</p></div>`));
+    }
+    return wrap;
+  }
+
+  const shown = filtered.slice(0, STATE.transactionsShown);
+  shown.forEach(t => wrap.appendChild(el(transactionCardHtml(t))));
+
+  if (filtered.length > shown.length) {
+    wrap.appendChild(el(`
+      <div class="row" style="justify-content:center; margin-top:10px;">
+        <button class="btn btn-sm" onclick="showMoreTransactions()">Show more (${filtered.length - shown.length} left)</button>
+      </div>
+    `));
+  }
+
+  return wrap;
+}
+window.setTxLeagueFilter = function (v) { STATE.transactionsLeagueFilter = v; STATE.transactionsShown = 30; render(); };
+window.setTxTypeFilter = function (v) { STATE.transactionsTypeFilter = v; STATE.transactionsShown = 30; render(); };
+window.showMoreTransactions = function () { STATE.transactionsShown += 30; render(); };
+
+/* =========================================================
+   RENDER: LIVE DRAFT
+========================================================= */
+function renderDraftTab() {
+  const wrap = document.createElement("div");
+  wrap.appendChild(el(`
+    <div class="row" style="margin-top:16px; justify-content:space-between;">
+      <span class="muted" style="font-size:12px;">Draft schedule across your leagues - auto-refreshes every 15s while live drafts are running</span>
+      <button class="btn btn-sm" onclick="loadDrafts()" ${STATE.loading?"disabled":""}>
+        ${STATE.loading ? '<span class="spinner"></span>' : ''} Refresh
+      </button>
+    </div>
+  `));
+
+  const leagues = getLeagues().filter(l => l.source !== "manual" && !isDismissedByMe(l));
+  if (leagues.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Add a Sleeper league first.</p></div>`));
+    return wrap;
+  }
+  if (!STATE.draftsLoaded) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Loading drafts...</p></div>`));
+    return wrap;
+  }
+
+  const entries = [];
+  leagues.forEach(l => {
+    const drafts = (STATE.draftsByLeague && STATE.draftsByLeague[l.id]) || [];
+    drafts.forEach(d => entries.push({ league: l, draft: d }));
+  });
+
+  if (entries.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>No draft data found for your leagues yet.</p></div>`));
+    return wrap;
+  }
+
+  const live = entries.filter(e => e.draft.status === "drafting");
+  const upcoming = entries.filter(e => e.draft.status === "pre_draft")
+    .sort((a, b) => (a.draft.start_time || 0) - (b.draft.start_time || 0));
+  const done = entries.filter(e => e.draft.status === "complete")
+    .sort((a, b) => (b.draft.start_time || 0) - (a.draft.start_time || 0));
+
+  if (live.length > 0) {
+    wrap.appendChild(el(`<div style="font-weight:700; margin:18px 0 8px; color:var(--gold);">Live now</div>`));
+    live.forEach(e => wrap.appendChild(el(liveDraftCardHtml(e.league, e.draft))));
+  }
+
+  wrap.appendChild(el(`<div style="font-weight:700; margin:18px 0 8px;">Upcoming</div>`));
+  if (upcoming.length === 0) {
+    wrap.appendChild(el(`<div class="muted" style="font-size:12px;">No scheduled drafts.</div>`));
+  } else {
+    const panel = document.createElement("div");
+    panel.className = "panel";
+    panel.innerHTML = `
+      <table>
+        <thead><tr><th>League</th><th>Status</th><th class="num">Date</th></tr></thead>
+        <tbody>
+          ${upcoming.map(e => `
+            <tr>
+              <td>${escapeHtml(e.league.nickname)}</td>
+              <td>${draftStatusLabel(e.draft.status)}</td>
+              <td class="num mono">${fmtDraftTime(e.draft.start_time)}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+    wrap.appendChild(panel);
+  }
+
+  if (done.length > 0) {
+    wrap.appendChild(el(`<div style="font-weight:700; margin:18px 0 8px;">Completed</div>`));
+    const panel = document.createElement("div");
+    panel.className = "panel";
+    panel.innerHTML = `
+      <table>
+        <thead><tr><th>League</th><th class="num">Date</th><th class="num"></th></tr></thead>
+        <tbody>
+          ${done.map(e => `
+            <tr style="cursor:pointer;" onclick="viewDraftBoard('${e.league.id}','${e.draft.draft_id}')">
+              <td>${escapeHtml(e.league.nickname)}</td>
+              <td class="num mono">${fmtDraftTime(e.draft.start_time)}</td>
+              <td class="num muted">View board &gt;</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+    wrap.appendChild(panel);
+  }
+
+  return wrap;
+}
+
+function findMySlot(draft, myRosterId) {
+  if (!myRosterId || !draft.slot_to_roster_id) return null;
+  const entry = Object.entries(draft.slot_to_roster_id).find(([, rid]) => String(rid) === String(myRosterId));
+  return entry ? parseInt(entry[0], 10) : null;
+}
+
+function computePicksUntilMe(teams, madeCount, mySlot) {
+  if (!teams || !mySlot) return null;
+  const nextPickNo = madeCount + 1;
+  for (let pickNo = nextPickNo; pickNo <= nextPickNo + teams * 3; pickNo++) {
+    const round = Math.ceil(pickNo / teams);
+    const posInRound = pickNo - (round - 1) * teams;
+    const slotAtThisPick = (round % 2 === 1) ? posInRound : (teams - posInRound + 1);
+    if (slotAtThisPick === mySlot) {
+      return { picksUntil: pickNo - nextPickNo, isNow: pickNo === nextPickNo, round, posInRound };
+    }
+  }
+  return null;
+}
+
+function liveDraftCardHtml(league, draft) {
+  const picks = (STATE.picksByDraft && STATE.picksByDraft[draft.draft_id]) || [];
+  const recent = picks.slice(-8).reverse();
+  const data = getLeagueData(league.id);
+  const teams = draft.settings?.teams || (data ? data.rosters.length : 0) || 0;
+
+  const myRosterId = myTeamFor(league);
+  const mySlot = findMySlot(draft, myRosterId);
+  const onClock = computePicksUntilMe(teams, picks.length, mySlot);
+
+  let notifier = "";
+  if (onClock) {
+    if (onClock.isNow) {
+      notifier = `<div style="margin-top:8px; padding:8px 10px; border-radius:8px; background:var(--gold); color:#1a1305; font-weight:800; font-size:13px;">You're on the clock!</div>`;
+    } else {
+      notifier = `<div class="muted mono" style="margin-top:8px; font-size:11px;">${onClock.picksUntil} pick${onClock.picksUntil===1?"":"s"} until you're on the clock (Round ${onClock.round}, Pick ${onClock.posInRound})</div>`;
+    }
+  } else if (myRosterId && !mySlot) {
+    notifier = `<div class="muted" style="margin-top:8px; font-size:11px;">Can't find your draft slot yet - try Refresh.</div>`;
+  } else if (!myRosterId) {
+    notifier = `<div class="muted" style="margin-top:8px; font-size:11px;">Set "My team" on this league to see your countdown.</div>`;
+  }
+
+  return `
+    <div class="panel" style="padding:14px; margin-bottom:14px; border-color: var(--gold);">
+      <div class="row" style="justify-content:space-between;">
+        <span style="font-weight:700;">${escapeHtml(league.nickname)}</span>
+        <div class="row">
+          <span class="pbadge" style="background:var(--gold);">LIVE</span>
+          <button class="btn btn-sm" onclick="viewDraftBoard('${league.id}','${draft.draft_id}')">Full board</button>
+        </div>
+      </div>
+      <div class="muted" style="font-size:11px; margin-top:4px;">${picks.length} pick${picks.length===1?"":"s"} made</div>
+      ${notifier}
+      <div style="margin-top:8px;">
+        ${recent.map(p => {
+          const pl = PLAYERS ? PLAYERS[p.player_id] : null;
+          const badge = badgeInfo(pl);
+          const posInRound = teams ? (p.pick_no - (p.round - 1) * teams) : p.pick_no;
+          const teamName = data ? rosterOwnerName(p.roster_id, data.rosters, data.users) : `Roster ${p.roster_id}`;
+          return `<div class="prow" style="justify-content:space-between;">
+            <span class="pname">R${p.round}.${String(posInRound||"").padStart(2,"0")} - ${escapeHtml(playerName(pl, p.player_id))}
+              <span class="muted" style="font-size:10px;">(${escapeHtml(teamName)})</span>
+            </span>
+            <span class="pbadge" style="background:${badge.color}">${badge.label}</span>
+          </div>`;
+        }).join("") || '<div class="muted" style="font-size:12px;">No picks yet.</div>'}
+      </div>
+    </div>`;
+}
+
+/* =========================================================
+   RENDER: DRAFT BOARD (full board + position-by-round analytics)
+========================================================= */
+const DRAFT_ANALYTICS_POS = ["QB","RB","WR","TE","DL","LB","DB","K","DEF"];
+
+function renderDraftBoard() {
+  const wrap = document.createElement("div");
+  const leagueId = STATE.selectedLeagueId;
+  const draftId = STATE.selectedDraftId;
+  const leagues = getLeagues();
+  const league = leagues.find(l => l.id === leagueId);
+  const drafts = (STATE.draftsByLeague && STATE.draftsByLeague[leagueId]) || [];
+  const draft = drafts.find(d => d.draft_id === draftId);
+  const picks = (STATE.picksByDraft && STATE.picksByDraft[draftId]) || [];
+  const data = getLeagueData(leagueId);
+
+  wrap.appendChild(el(`
+    <div class="row" style="margin-top:16px; justify-content:space-between;">
+      <span style="font-weight:700;">${escapeHtml(league?.nickname || "")} draft board</span>
+      <button class="btn btn-sm" onclick="navigate('draft')">Back to Live Draft</button>
+    </div>
+  `));
+
+  if (!draft || picks.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>No pick data available for this draft.</p></div>`));
+    return wrap;
+  }
+
+  const teams = draft.settings?.teams || (data ? data.rosters.length : 0) || 0;
+  const rounds = draft.settings?.rounds || Math.max(1, ...picks.map(p => p.round || 1));
+
+  const slotLabels = [];
+  for (let s = 1; s <= teams; s++) {
+    const rid = draft.slot_to_roster_id ? draft.slot_to_roster_id[String(s)] : null;
+    const roster = data && rid ? data.rosters.find(r => String(r.roster_id) === String(rid)) : null;
+    slotLabels.push(roster ? teamLabel(roster, data.users) : `Slot ${s}`);
+  }
+
+  const bySlot = {};
+  picks.forEach(p => { bySlot[`${p.round}-${p.draft_slot}`] = p; });
+
+  const boardPanel = document.createElement("div");
+  boardPanel.className = "panel";
+  boardPanel.style.overflowX = "auto";
+  let boardHtml = `<table><thead><tr><th style="width:36px;">Rd</th>${slotLabels.map(n => `<th style="min-width:90px;">${escapeHtml(n)}</th>`).join("")}</tr></thead><tbody>`;
+  for (let r = 1; r <= rounds; r++) {
+    boardHtml += `<tr><td class="rank">${r}</td>`;
+    for (let s = 1; s <= teams; s++) {
+      const p = bySlot[`${r}-${s}`];
+      if (!p) { boardHtml += `<td class="muted" style="font-size:11px;">-</td>`; continue; }
+      const pl = PLAYERS ? PLAYERS[p.player_id] : null;
+      const badge = badgeInfo(pl);
+      boardHtml += `<td style="font-size:11px; white-space:nowrap;">${escapeHtml(playerName(pl, p.player_id))}<br/><span class="pbadge" style="background:${badge.color}">${badge.label}</span></td>`;
+    }
+    boardHtml += `</tr>`;
+  }
+  boardHtml += `</tbody></table>`;
+  boardPanel.innerHTML = boardHtml;
+  wrap.appendChild(boardPanel);
+
+  wrap.appendChild(el(`<div style="font-weight:700; margin:18px 0 8px;">Positions by round</div>`));
+  const countsByRound = {};
+  picks.forEach(p => {
+    const pl = PLAYERS ? PLAYERS[p.player_id] : null;
+    const fp = (pl && (pl.fantasy_positions?.[0] || pl.position)) || "?";
+    countsByRound[p.round] = countsByRound[p.round] || {};
+    countsByRound[p.round][fp] = (countsByRound[p.round][fp] || 0) + 1;
+  });
+  const roundsWithPicks = Object.keys(countsByRound).map(Number).sort((a, b) => a - b);
+  const analyticsPanel = document.createElement("div");
+  analyticsPanel.className = "panel";
+  analyticsPanel.innerHTML = `
+    <table>
+      <thead><tr><th>Round</th>${DRAFT_ANALYTICS_POS.map(p => `<th class="num">${p}</th>`).join("")}</tr></thead>
+      <tbody>
+        ${roundsWithPicks.map(r => `
+          <tr>
+            <td class="rank">${r}</td>
+            ${DRAFT_ANALYTICS_POS.map(p => `<td class="num mono">${(countsByRound[r][p]) || 0}</td>`).join("")}
+          </tr>`).join("")}
+      </tbody>
+    </table>`;
+  wrap.appendChild(analyticsPanel);
+
+  return wrap;
+}
+
+function rosterOwnerName(rosterId, rosters, users) {
+  const r = rosters.find(x => x.roster_id === rosterId);
+  return r ? teamLabel(r, users) : `Roster ${rosterId}`;
+}
+window.viewPlayerOwnership = function (name) {
+  STATE.finderQuery = name;
+  navigate("finder");
+};
+
+function transactionPlayerRow(pid, rosterId, t, sign) {
+  const p = PLAYERS ? PLAYERS[pid] : null;
+  const name = playerName(p, pid);
+  const badge = badgeInfo(p);
+  const color = sign === "+" ? "var(--win)" : "var(--loss)";
+  return `
+    <div class="prow" style="flex-wrap:wrap;">
+      <span style="color:${color};">${sign} ${escapeHtml(name)}</span>
+      <span class="pbadge" style="background:${badge.color};">${badge.label}</span>
+      ${p?.team ? `<span class="muted mono" style="font-size:10px;">${escapeHtml(p.team)}</span>` : ""}
+      <button class="btn btn-sm" style="padding:2px 8px; font-size:10.5px;" onclick="viewPlayerOwnership('${name.replace(/'/g, "\\'")}')">View ownership</button>
+      <span class="muted" style="margin-left:auto; font-size:11px;">${escapeHtml(rosterOwnerName(rosterId, t.leagueRosters, t.leagueUsers))}</span>
+    </div>`;
+}
+
+function transactionCardHtml(t) {
+  const adds = t.adds || {};
+  const drops = t.drops || {};
+  const addRows = Object.keys(adds).map(pid => transactionPlayerRow(pid, adds[pid], t, "+"));
+  const dropRows = Object.keys(drops).map(pid => transactionPlayerRow(pid, drops[pid], t, "-"));
+  const isTrade = t.type === "trade";
+  const typeLabel = t.type === "waiver" ? "Waiver" : isTrade ? "Trade" : "Free Agent";
+  const cardStyle = isTrade
+    ? "border-color: var(--gold); background: rgba(215,165,62,0.06);"
+    : "";
+  return `
+    <div class="finder-result" style="${cardStyle}">
+      <div class="row" style="justify-content:space-between;">
+        <span style="font-weight:700; font-size:12.5px;">
+          ${isTrade ? '<span class="pbadge" style="background:var(--gold); margin-right:4px;">TRADE</span>' : ""}
+          ${escapeHtml(t.leagueName)} - ${typeLabel}
+        </span>
+        <span class="muted mono" style="font-size:10.5px;">${fmtTime(t.created)}</span>
+      </div>
+      <div style="margin-top:6px;">
+        ${addRows.join("") || dropRows.join("") ? (addRows.join("") + dropRows.join("")) : '<span class="muted" style="font-size:12px;">No player changes recorded.</span>'}
+      </div>
+    </div>`;
+}
+
+/* =========================================================
+   RENDER: POSITIONAL NEEDS (across leagues with "My team" set)
+========================================================= */
+/* =========================================================
+   RENDER: EXPOSURE (player share % across "my" teams)
+========================================================= */
+window.setExposureFilter = function (v) { STATE.exposureFilter = v; render(); };
+
+function leagueSupportsPosition(league, posGroup) {
+  const slots = (league && league.roster_positions) || [];
+  if (slots.includes(posGroup)) return true;
+  if (["DL","LB","DB"].includes(posGroup) && slots.includes("IDP_FLEX")) return true;
+  if (["QB","RB","WR","TE"].includes(posGroup) && (slots.includes("FLEX") || slots.includes("SUPER_FLEX"))) return true;
+  return false;
+}
+
+function renderExposure() {
+  const wrap = document.createElement("div");
+  const leagues = getLeagues().filter(l => myTeamFor(l) && getLeagueData(l.id));
+
+  if (leagues.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>No teams set yet. Set "My team" on a league to see your exposure here.</p></div>`));
+    return wrap;
+  }
+
+  const totalTeams = leagues.length;
+  // How many of "my" teams even support each position group - a league with no
+  // IDP slots at all shouldn't dilute an LB's exposure percentage, for example.
+  const posGroupTeamCount = {};
+  POS_GROUPS.forEach(pg => {
+    posGroupTeamCount[pg] = leagues.filter(l => leagueSupportsPosition(getLeagueData(l.id).league, pg)).length;
+  });
+
+  const counts = {}; // playerId -> { count, leagueNames: [] }
+  leagues.forEach(l => {
+    const data = getLeagueData(l.id);
+    const roster = data.rosters.find(r => String(r.roster_id) === String(myTeamFor(l)));
+    if (!roster) return;
+    (roster.players || []).forEach(id => {
+      if (!counts[id]) counts[id] = { count: 0, leagueNames: [] };
+      counts[id].count++;
+      counts[id].leagueNames.push(l.nickname);
+    });
+  });
+
+  let rows = Object.keys(counts).map(id => {
+    const p = PLAYERS ? PLAYERS[id] : null;
+    const posGroup = (p && (p.fantasy_positions?.[0] || p.position)) || null;
+    const denom = (posGroup && posGroupTeamCount[posGroup] > 0) ? posGroupTeamCount[posGroup] : totalTeams;
+    return {
+      id, name: playerName(p, id), badge: badgeInfo(p),
+      count: counts[id].count, leagueNames: counts[id].leagueNames,
+      denom, pct: (counts[id].count / denom) * 100
+    };
+  });
+  rows.sort((a, b) => b.pct - a.pct || a.name.localeCompare(b.name));
+
+  const q = (STATE.exposureFilter || "").trim().toLowerCase();
+  if (q) rows = rows.filter(r => r.name.toLowerCase().includes(q));
+
+  wrap.appendChild(el(`
+    <div class="row" style="margin-top:16px; justify-content:space-between;">
+      <span class="muted" style="font-size:12px;">Share of your teams rostering each player - IDP % only counts leagues with IDP slots</span>
+    </div>
+    <input type="text" placeholder="Filter by player name..." style="width:100%; margin:10px 0 14px;"
+      oninput="setExposureFilter(this.value)" value="${escapeHtml(STATE.exposureFilter)}" />
+  `));
+
+  if (rows.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>No players match that filter.</p></div>`));
+    return wrap;
+  }
+
+  const panel = document.createElement("div");
+  panel.className = "panel";
+  panel.innerHTML = `
+    <table>
+      <thead><tr><th>Player</th><th class="num">Teams</th><th class="num">Share</th></tr></thead>
+      <tbody>
+        ${rows.map(r => `
+          <tr>
+            <td>
+              ${escapeHtml(r.name)} <span class="pbadge" style="background:${r.badge.color}">${r.badge.label}</span>
+              <div class="muted" style="font-size:10px; margin-top:2px;">${r.leagueNames.map(n => escapeHtml(n)).join(", ")}</div>
+            </td>
+            <td class="num mono">${r.count}/${r.denom}</td>
+            <td class="num mono">${r.pct.toFixed(0)}%</td>
+          </tr>`).join("")}
+      </tbody>
+    </table>`;
+  wrap.appendChild(panel);
+  return wrap;
+}
+
+/* =========================================================
+   RENDER: COMPARE ROSTERS
+========================================================= */
+function renderCompare() {
+  const wrap = document.createElement("div");
+  const leagues = getLeagues();
+
+  if (leagues.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Add at least one league to compare rosters.</p></div>`));
+    return wrap;
+  }
+
+  wrap.appendChild(el(`<div style="margin-top:16px;"></div>`));
+  const grid = document.createElement("div");
+  grid.className = "compare-grid";
+  grid.appendChild(comparePickerHtml("a", STATE.compareA, leagues));
+  grid.appendChild(comparePickerHtml("b", STATE.compareB, leagues));
+  wrap.appendChild(grid);
+
+  return wrap;
+}
+
+function comparePickerHtml(side, state, leagues) {
+  const data = state.leagueId ? getLeagueData(state.leagueId) : null;
+  const slots = data ? starterSlots(data.league) : [];
+  const roster = data && state.rosterId ? data.rosters.find(r => String(r.roster_id) === String(state.rosterId)) : null;
+  const leagueEntry = state.leagueId ? leagues.find(l => l.id === state.leagueId) : null;
+  const myRosterId = leagueEntry ? myTeamFor(leagueEntry) : null;
+
+  const container = document.createElement("div");
+  const leagueOptions = `<option value="">Select a league...</option>` +
+    leagues.map(l => `<option value="${l.id}" ${state.leagueId===l.id?"selected":""}>${escapeHtml(l.nickname)}</option>`).join("");
+  const teamOptions = data ? `<option value="">Select a team...</option>` +
+    data.rosters.map(r => `<option value="${r.roster_id}" ${String(state.rosterId)===String(r.roster_id)?"selected":""}>${escapeHtml(teamLabel(r, data.users))}</option>`).join("") : "";
+
+  container.innerHTML = `
+    <div class="compare-picker">
+      <select onchange="onCompareChange('${side}','leagueId', this.value)">${leagueOptions}</select>
+      ${data ? `<select onchange="onCompareChange('${side}','rosterId', this.value)">${teamOptions}</select>` : ""}
+    </div>
+    <div>${roster ? rosterCardHtml(roster, data.users, slots, data.league, myRosterId) : ""}</div>
+  `;
+  return container;
+}
+
+/* =========================================================
+   UTIL
+========================================================= */
+function escapeHtml(str) {
+  return String(str ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+}
+window.navigate = navigate;
+
+window.loadDashboardExtras = async function () {
+  try {
+    if (!PLAYERS) PLAYERS = await ensurePlayers(false);
+    const state = await ensureNflState();
+    const week = (state.season_type === "pre" || !state.week) ? 1 : state.week;
+    STATE.dashboardWeek = week;
+    if (!STATE.nflSchedule) {
+      try {
+        const res = await fetch(`https://api.sleeper.app/schedule/nfl/regular/2025`);
+        STATE.nflSchedule = res.ok ? await res.json() : [];
+      } catch (e) { STATE.nflSchedule = []; }
+    }
+    const leagues = getLeagues().filter(l => l.source !== "manual" && myTeamFor(l) && getLeagueData(l.id));
+    for (const l of leagues) {
+      if (!STATE.matchupsCache[l.id]) {
+        try { STATE.matchupsCache[l.id] = await fetchJSON(`${SLEEPER}/league/${l.id}/matchups/${week}`) || []; }
+        catch (e) { STATE.matchupsCache[l.id] = []; }
+      }
+    }
+  } catch (e) { console.error("Dashboard extras failed", e); }
+  if (STATE.route === "dashboard") render();
+};
+
+/* boot */
+render();
+if (getCloudConfig()) { pullCloudNow(); }
+if (getLeagues().filter(l => l.source !== "manual").length > 0) {
+  setTimeout(() => { if (!STATE.transactions) loadTransactions(); }, 300);
+  setTimeout(() => { loadDashboardExtras(); }, 600);
+}
+</script>
+</body>
+</html>
