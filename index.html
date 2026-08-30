@@ -269,7 +269,14 @@ async function cloudFetch(path, options) {
     const authHint = res.status === 401 || res.status === 403 ? " Check that the passphrase matches on both devices." : "";
     throw new Error("Cloud sync error (" + res.status + "):" + authHint + " " + text.slice(0, 140));
   }
-  return res.status === 204 ? null : res.json();
+  if (res.status === 204) return null;
+  const text = await res.text();
+  if (!text) return null; // PostgREST can return 201/200 with an empty body too, not just 204
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw new Error("Cloud sync returned unparseable response: " + text.slice(0, 140));
+  }
 }
 async function cloudPullLeagues() {
   const rows = await cloudFetch("leagues?select=*");
