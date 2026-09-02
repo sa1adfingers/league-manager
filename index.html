@@ -81,6 +81,16 @@
   .league-card:hover { border-color: var(--gold); }
   .league-card-title { font-weight:700; font-size:15px; margin-bottom:2px; }
   .league-card-sub { font-size:11px; color:var(--text-faint); margin-bottom:10px; }
+  .input-clear-wrap { position:relative; display:inline-flex; vertical-align:middle; }
+  .input-clear-wrap input { width:100%; }
+  .input-clear-btn {
+    display:none; align-items:center; justify-content:center;
+    position:absolute; right:4px; top:50%; transform:translateY(-50%);
+    width:16px; height:16px; padding:0; border:none; border-radius:50%;
+    background:var(--text-faint); color:var(--bg); font-size:12px; line-height:1;
+    cursor:pointer; opacity:0.7;
+  }
+  .input-clear-btn:hover { opacity:1; }
   .league-card-row { display:flex; justify-content:space-between; font-size:12.5px; padding:3px 0; border-top:1px solid var(--line); }
   .league-card-actions { display:flex; gap:6px; margin-top:10px; }
   .empty-state { text-align:center; color:var(--text-faint); padding:60px 20px; }
@@ -398,6 +408,55 @@ function playerName(p, id) {
   if (!p) return id;
   return (`${p.first_name || ""} ${p.last_name || ""}`).trim() || id;
 }
+/* =========================================================
+   MANUAL ROSTER NAME MATCHING - lets manual leagues (ESPN etc.)
+   have real rosters by matching typed/pasted player names against
+   Sleeper's own player database (already loaded for badges), so
+   the exact same roster-card rendering works with zero changes.
+========================================================= */
+function normalizePlayerName(name) {
+  return (name || "")
+    .toLowerCase()
+    .replace(/[.''\-]/g, "")
+    .replace(/\b(jr|sr|ii|iii|iv|v)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+let PLAYER_NAME_INDEX = null;
+function buildPlayerNameIndex() {
+  if (PLAYER_NAME_INDEX || !PLAYERS) return PLAYER_NAME_INDEX;
+  const index = new Map();
+  const add = (key, id, active) => {
+    if (!key) return;
+    const existing = index.get(key);
+    if (!existing || (active && !existing.active)) index.set(key, { id, active });
+  };
+  for (const id in PLAYERS) {
+    const p = PLAYERS[id];
+    const active = p.status === "Active" || !p.status;
+    if (p.position === "DEF" || p.fantasy_positions?.[0] === "DEF") {
+      add(normalizePlayerName(`${p.first_name || ""} ${p.last_name || ""}`), id, active);
+      add(normalizePlayerName(p.team), id, active); // e.g. "SF"
+      add(normalizePlayerName(`${p.team} DEF`), id, active);
+      add(normalizePlayerName(`${p.team} DST`), id, active);
+      continue;
+    }
+    const full = normalizePlayerName(`${p.first_name || ""} ${p.last_name || ""}`);
+    add(full, id, active);
+  }
+  PLAYER_NAME_INDEX = index;
+  return index;
+}
+
+function matchPlayerByName(rawName) {
+  const index = buildPlayerNameIndex();
+  if (!index) return null;
+  const norm = normalizePlayerName(rawName);
+  const hit = index.get(norm);
+  return hit ? hit.id : null;
+}
+
 function teamLabel(roster, users) {
   const owner = users.find(u => u.user_id === roster.owner_id);
   const metaName = owner?.metadata?.team_name;
@@ -531,6 +590,9 @@ let STATE = {
   nflSchedule: null,
   matchupDetailScoring: null,
   waiverTargetsLeagueId: null,
+  manualEditorOpen: {},
+  manualRosterOpen: {},
+  manualRosterResult: {},
   waiverTargetsData: null,
   dashboardWeek: null,
   trending: null,
@@ -698,26 +760,92 @@ window.removeManualTeam = async function (leagueId, rosterId) {
   render();
 };
 
+window.toggleManualRoster = function (leagueId, rosterId) {
+  const key = `${leagueId}|${rosterId}`;
+  STATE.manualRosterOpen[key] = !STATE.manualRosterOpen[key];
+  render();
+};
+
+window.saveManualRoster = async function (leagueId, rosterId) {
+  const textarea = document.getElementById(`roster-paste-${leagueId}-${rosterId}`);
+  if (!textarea) return;
+  if (!PLAYERS) PLAYERS = await ensurePlayers(false);
+
+  const lines = textarea.value.split("\n").map(s => s.trim()).filter(Boolean);
+  const matched = [];
+  const unmatched = [];
+  for (const line of lines) {
+    const id = matchPlayerByName(line);
+    if (id) matched.push(id);
+    else unmatched.push(line);
+  }
+
+  const data = getLeagueData(leagueId);
+  const roster = data.rosters.find(r => String(r.roster_id) === String(rosterId));
+  if (!roster) return;
+  roster.players = matched;
+  roster.starters = []; // manual rosters don't track a starting lineup, everything shows under "Roster"
+  data.syncedAt = Date.now();
+  saveLeagueData(leagueId, data);
+  await pushManualLeagueUpdate(leagueId);
+
+  const key = `${leagueId}|${rosterId}`;
+  STATE.manualRosterResult[key] = unmatched.length
+    ? { text: `Saved ${matched.length}. Couldn't match: ${unmatched.join(", ")}`, ok: false }
+    : { text: `Saved all ${matched.length} players.`, ok: true };
+  render();
+};
+
 function renderManualTeamsEditor(leagueId, data) {
+  const hasTeams = data.rosters.length > 0;
+  const isOpen = STATE.manualEditorOpen[leagueId] !== undefined ? STATE.manualEditorOpen[leagueId] : !hasTeams;
+
+  if (!isOpen) {
+    return `
+      <div class="panel" style="padding:10px 14px; margin-top:16px;">
+        <div class="row" style="justify-content:space-between;">
+          <span class="muted" style="font-size:12px;">${data.rosters.length} team${data.rosters.length===1?"":"s"} entered manually</span>
+          <button class="btn btn-sm" onclick="toggleManualEditor('${leagueId}')">Edit teams</button>
+        </div>
+      </div>`;
+  }
+
   const rows = data.rosters.map(r => {
     const user = data.users.find(u => u.user_id === r.owner_id);
     const pf = ((r.settings.fpts || 0) + (r.settings.fpts_decimal || 0) / 100).toFixed(2);
     const pa = ((r.settings.fpts_against || 0) + (r.settings.fpts_against_decimal || 0) / 100).toFixed(2);
+    const rosterOpen = STATE.manualRosterOpen[`${leagueId}|${r.roster_id}`];
+    const playerCount = (r.players || []).length;
     return `
-      <div class="row" style="gap:6px; padding:6px 0; border-top:1px solid var(--line); flex-wrap:wrap;">
-        <input type="text" value="${escapeHtml(user?.display_name || "")}" placeholder="Team name" style="flex:2; min-width:120px; font-size:12px;"
-          onchange="updateManualTeam('${leagueId}','${r.roster_id}','name',this.value)" />
-        <input type="number" value="${r.settings.wins||0}" placeholder="W" style="width:52px; font-size:12px;"
-          onchange="updateManualTeam('${leagueId}','${r.roster_id}','wins',this.value)" />
-        <input type="number" value="${r.settings.losses||0}" placeholder="L" style="width:52px; font-size:12px;"
-          onchange="updateManualTeam('${leagueId}','${r.roster_id}','losses',this.value)" />
-        <input type="number" value="${r.settings.ties||0}" placeholder="T" style="width:52px; font-size:12px;"
-          onchange="updateManualTeam('${leagueId}','${r.roster_id}','ties',this.value)" />
-        <input type="number" step="0.01" value="${pf}" placeholder="PF" style="width:72px; font-size:12px;"
-          onchange="updateManualTeam('${leagueId}','${r.roster_id}','pf',this.value)" />
-        <input type="number" step="0.01" value="${pa}" placeholder="PA" style="width:72px; font-size:12px;"
-          onchange="updateManualTeam('${leagueId}','${r.roster_id}','pa',this.value)" />
-        <button class="btn btn-sm btn-danger" onclick="removeManualTeam('${leagueId}','${r.roster_id}')">Remove</button>
+      <div style="padding:6px 0; border-top:1px solid var(--line);">
+        <div class="row" style="gap:6px; flex-wrap:wrap;">
+          <input type="text" value="${escapeHtml(user?.display_name || "")}" placeholder="Team name" style="flex:2; min-width:120px; font-size:12px;"
+            onchange="updateManualTeam('${leagueId}','${r.roster_id}','name',this.value)" />
+          <input type="number" value="${r.settings.wins||0}" placeholder="W" style="width:52px; font-size:12px;"
+            onchange="updateManualTeam('${leagueId}','${r.roster_id}','wins',this.value)" />
+          <input type="number" value="${r.settings.losses||0}" placeholder="L" style="width:52px; font-size:12px;"
+            onchange="updateManualTeam('${leagueId}','${r.roster_id}','losses',this.value)" />
+          <input type="number" value="${r.settings.ties||0}" placeholder="T" style="width:52px; font-size:12px;"
+            onchange="updateManualTeam('${leagueId}','${r.roster_id}','ties',this.value)" />
+          <input type="number" step="0.01" value="${pf}" placeholder="PF" style="width:72px; font-size:12px;"
+            onchange="updateManualTeam('${leagueId}','${r.roster_id}','pf',this.value)" />
+          <input type="number" step="0.01" value="${pa}" placeholder="PA" style="width:72px; font-size:12px;"
+            onchange="updateManualTeam('${leagueId}','${r.roster_id}','pa',this.value)" />
+          <button class="btn btn-sm" onclick="toggleManualRoster('${leagueId}','${r.roster_id}')">Roster (${playerCount})</button>
+          <button class="btn btn-sm btn-danger" onclick="removeManualTeam('${leagueId}','${r.roster_id}')">Remove</button>
+        </div>
+        ${rosterOpen ? `
+          <div style="margin-top:8px; padding:10px; background:rgba(255,255,255,0.03); border-radius:6px;">
+            <div class="muted" style="font-size:10.5px; margin-bottom:5px;">
+              Paste one player name per line (works great pasted straight from a chat with Claude). Matched against Sleeper's player database - unmatched names are skipped and listed after saving.
+            </div>
+            <textarea id="roster-paste-${leagueId}-${r.roster_id}" rows="6" style="width:100%; font-size:12px; font-family:inherit;"
+              placeholder="Joe Burrow&#10;De'Von Achane&#10;James Cook&#10;...">${(r.players || []).map(id => (PLAYERS && PLAYERS[id]) ? playerName(PLAYERS[id], id) : id).join("\n")}</textarea>
+            <div class="row" style="margin-top:6px; justify-content:space-between;">
+              <span class="muted" style="font-size:11px; color:${STATE.manualRosterResult[`${leagueId}|${r.roster_id}`]?.ok === false ? "var(--loss)" : "var(--win)"};">${escapeHtml(STATE.manualRosterResult[`${leagueId}|${r.roster_id}`]?.text || "")}</span>
+              <button class="btn btn-sm btn-primary" onclick="saveManualRoster('${leagueId}','${r.roster_id}')">Save roster</button>
+            </div>
+          </div>` : ""}
       </div>`;
   }).join("");
 
@@ -725,15 +853,23 @@ function renderManualTeamsEditor(leagueId, data) {
     <div class="panel" style="padding:14px; margin-top:16px;">
       <div class="row" style="justify-content:space-between;">
         <span style="font-size:13px; font-weight:700;">Manual teams</span>
-        <button class="btn btn-sm btn-primary" onclick="addManualTeam('${leagueId}')">+ Add team</button>
+        <span class="row" style="gap:6px;">
+          <button class="btn btn-sm btn-primary" onclick="addManualTeam('${leagueId}')">+ Add team</button>
+          ${hasTeams ? `<button class="btn btn-sm" onclick="toggleManualEditor('${leagueId}')">Collapse</button>` : ""}
+        </span>
       </div>
       <div class="muted" style="font-size:11px; margin-top:4px;">
-        Enter records and points by hand. Rosters aren't tracked for manual leagues, so Needs/Exposure/Player Finder won't include this league.
+        Enter records and points by hand, and optionally paste a roster per team (see "Roster" button below). Manual rosters aren't wired into Needs/Exposure/Waiver Targets - those still need a live Sleeper sync.
       </div>
       ${rows || '<div class="muted" style="font-size:12px; margin-top:10px;">No teams yet - add one above.</div>'}
     </div>
   `;
 }
+window.toggleManualEditor = function (leagueId) {
+  const current = STATE.manualEditorOpen[leagueId] !== undefined ? STATE.manualEditorOpen[leagueId] : (getLeagueData(leagueId)?.rosters.length === 0);
+  STATE.manualEditorOpen[leagueId] = !current;
+  render();
+};
 
 window.syncAll = async function () {
   await withLoading(async () => {
@@ -1136,6 +1272,61 @@ function render() {
   else body = renderDashboard();
 
   app.appendChild(body);
+  enhanceTextInputs();
+}
+
+/* =========================================================
+   INPUT ENHANCEMENTS - applied site-wide, automatically, to
+   every text/number/search input after each render:
+   1. Click/focus selects all existing text (fast to retype)
+   2. A small "x" appears to instantly clear the field
+   Implemented as a re-runnable enhancer rather than editing
+   every individual input, since the app has 100+ of them
+   across every tab.
+========================================================= */
+function enhanceTextInputs() {
+  const selector = 'input[type="text"], input[type="search"], input[type="email"], input[type="password"]';
+  document.querySelectorAll(selector).forEach((input) => {
+    if (input.dataset.enhanced) return;
+    input.dataset.enhanced = "1";
+
+    input.addEventListener("focus", () => input.select());
+
+    // Wrap in a positioning container so the x button can sit inside the input.
+    // Layout-sizing styles (flex/width) must move to the wrapper, or rows that
+    // relied on the input's own flex/width for sizing would break.
+    const wrap = document.createElement("span");
+    wrap.className = "input-clear-wrap";
+    const cs = input.style;
+    ["flex", "flexGrow", "flexShrink", "flexBasis", "width", "minWidth", "maxWidth"].forEach((prop) => {
+      if (cs[prop]) { wrap.style[prop] = cs[prop]; cs[prop] = ""; }
+    });
+    input.parentNode.insertBefore(wrap, input);
+    wrap.appendChild(input);
+
+    const existingPadRight = window.getComputedStyle(input).paddingRight;
+    input.style.paddingRight = `calc(${existingPadRight} + 18px)`;
+
+    const clearBtn = document.createElement("button");
+    clearBtn.type = "button";
+    clearBtn.className = "input-clear-btn";
+    clearBtn.textContent = "\u00d7";
+    clearBtn.tabIndex = -1;
+    clearBtn.onclick = () => {
+      input.value = "";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      input.focus();
+      updateClearBtnVisibility();
+    };
+    wrap.appendChild(clearBtn);
+
+    function updateClearBtnVisibility() {
+      clearBtn.style.display = input.value ? "flex" : "none";
+    }
+    input.addEventListener("input", updateClearBtnVisibility);
+    updateClearBtnVisibility();
+  });
 }
 
 function renderHeader() {
@@ -1681,17 +1872,18 @@ function rosterCardHtml(roster, users, slots, league, myRosterId) {
     }
   }
 
+  const hasStarterData = starters.length > 0;
   return `
     <div class="rcard" style="${isMine ? 'border-color: var(--gold); background: rgba(215,165,62,0.06);' : ''}">
       <div class="rcard-head">
         <span class="rcard-title">${isMine ? '<span class="pbadge" style="background:var(--gold); margin-right:5px;">MINE</span>' : ''}${escapeHtml(teamLabel(roster, users))}</span>
         <span class="rcard-count">${all.length} rostered</span>
       </div>
-      <div class="rcard-section">
+      ${hasStarterData ? `<div class="rcard-section">
         <div class="rcard-section-label">Starters</div>
         ${starters.map((id,idx) => row(id, idx, true)).join("")}
-      </div>
-      ${bench.length ? `<div class="rcard-section"><div class="rcard-section-label">Bench</div>${bench.map(id=>row(id,null,false)).join("")}</div>` : ""}
+      </div>` : ""}
+      ${bench.length ? `<div class="rcard-section"><div class="rcard-section-label">${hasStarterData ? "Bench" : "Roster"}</div>${bench.map(id=>row(id,null,false)).join("")}</div>` : ""}
       ${taxi.length ? `<div class="rcard-section"><div class="rcard-section-label">Taxi</div>${taxi.map(id=>row(id,null,false)).join("")}</div>` : ""}
       ${reserve.length ? `<div class="rcard-section"><div class="rcard-section-label">IR</div>${reserve.map(id=>row(id,null,false)).join("")}</div>` : ""}
       ${countsHtml}
