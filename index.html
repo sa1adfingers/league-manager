@@ -2706,8 +2706,10 @@ function nflGameInfo(team, week) {
 function playerStatusBadge(p) {
   const status = p && p.injury_status;
   if (!status) return "";
+  const abbrev = { Questionable: "Q", Doubtful: "D", Out: "O", Suspended: "SUS", IR: "IR", PUP: "PUP" };
+  const label = abbrev[status] || status.slice(0, 3).toUpperCase();
   const color = status === "Out" || status === "IR" ? "var(--loss)" : "var(--gold)";
-  return `<span class="pbadge" style="background:${color};">${escapeHtml(status)}</span>`;
+  return `<span style="color:${color}; font-weight:700; font-size:10px;" title="${escapeHtml(status)}">${label}</span>`;
 }
 
 const STAT_LABELS = {
