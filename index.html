@@ -1347,17 +1347,17 @@ function renderHeader() {
       </div>
       <div class="nav">
         <button class="nav-btn ${STATE.route==='dashboard'?'active':''}" onclick="navigate('dashboard')">Dashboard</button>
-        <button class="nav-btn ${STATE.route==='sync'?'active':''}" onclick="navigate('sync')">Sync Leagues</button>
         <button class="nav-btn ${STATE.route==='matchups'?'active':''}" onclick="goMatchups()">Matchups</button>
-        <button class="nav-btn ${STATE.route==='transactions'?'active':''}" onclick="goTransactions()">Transactions</button>
-        <button class="nav-btn ${STATE.route==='draft'?'active':''}" onclick="goDraft()">Live Draft</button>
+        <button class="nav-btn ${STATE.route==='waivertargets'?'active':''}" onclick="navigate('waivertargets')">Waiver Targets</button>
         <button class="nav-btn ${STATE.route==='rankings'?'active':''}" onclick="navigate('rankings')">Rankings</button>
         <button class="nav-btn ${STATE.route==='trending'?'active':''}" onclick="goTrending()">Trending</button>
-        <button class="nav-btn ${STATE.route==='exposure'?'active':''}" onclick="navigate('exposure')">Exposure</button>
-        <button class="nav-btn ${STATE.route==='waivertargets'?'active':''}" onclick="navigate('waivertargets')">Waiver Targets</button>
-        <button class="nav-btn ${STATE.route==='settings'?'active':''}" onclick="navigate('settings')">Settings</button>
+        <button class="nav-btn ${STATE.route==='transactions'?'active':''}" onclick="goTransactions()">Transactions</button>
         <button class="nav-btn ${STATE.route==='finder'?'active':''}" onclick="navigate('finder')">Player Finder</button>
+        <button class="nav-btn ${STATE.route==='exposure'?'active':''}" onclick="navigate('exposure')">Exposure</button>
         <button class="nav-btn ${STATE.route==='compare'?'active':''}" onclick="navigate('compare')">Compare Rosters</button>
+        <button class="nav-btn ${STATE.route==='draft'?'active':''}" onclick="goDraft()">Live Draft</button>
+        <button class="nav-btn ${STATE.route==='sync'?'active':''}" onclick="navigate('sync')">Sync Leagues</button>
+        <button class="nav-btn ${STATE.route==='settings'?'active':''}" onclick="navigate('settings')">Settings</button>
       </div>
     </div>
   `);
