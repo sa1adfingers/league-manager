@@ -603,6 +603,7 @@ let STATE = {
   transactionsLeagueFilter: "all",
   transactionsTypeFilter: "all",
   exposureFilter: "",
+  exposureOpenCategories: {},
   finderQuery: "",
   draftsByLeague: {},
   picksByDraft: {},
@@ -3479,11 +3480,26 @@ function leagueSupportsPosition(league, posGroup) {
 
 function renderExposure() {
   const wrap = document.createElement("div");
-  const leagues = getLeagues().filter(l => l.source !== "manual" && myTeamFor(l) && getLeagueData(l.id));
+  const leagues = getLeagues().filter(l => myTeamFor(l) && getLeagueData(l.id));
 
   if (leagues.length === 0) {
     wrap.appendChild(el(`<div class="empty-state"><p>No teams set yet. Set "My team" on a league to see your exposure here.</p></div>`));
     return wrap;
+  }
+
+  // Manual leagues are created with an empty roster_positions list (there's no
+  // real Sleeper settings object to read it from), so leagueSupportsPosition
+  // would always say "no" for them even once they have real pasted rosters.
+  // Fall back to checking the actual rostered players in that case.
+  function myRosterHasPosition(l, pg) {
+    const data = getLeagueData(l.id);
+    const roster = data && data.rosters.find(r => String(r.roster_id) === String(myTeamFor(l)));
+    if (!roster) return false;
+    return (roster.players || []).some(id => {
+      const p = PLAYERS ? PLAYERS[id] : null;
+      const fp = (p && (p.fantasy_positions?.[0] || p.position)) || null;
+      return fp === pg;
+    });
   }
 
   const totalTeams = leagues.length;
@@ -3491,7 +3507,9 @@ function renderExposure() {
   // IDP slots at all shouldn't dilute an LB's exposure percentage, for example.
   const posGroupTeamCount = {};
   POS_GROUPS.forEach(pg => {
-    posGroupTeamCount[pg] = leagues.filter(l => leagueSupportsPosition(getLeagueData(l.id).league, pg)).length;
+    posGroupTeamCount[pg] = leagues.filter(l =>
+      leagueSupportsPosition(getLeagueData(l.id).league, pg) || (l.source === "manual" && myRosterHasPosition(l, pg))
+    ).length;
   });
 
   const counts = {}; // playerId -> { count, leagueNames: [] }
@@ -3544,8 +3562,16 @@ function renderExposure() {
   CATEGORIES.forEach(cat => {
     const catRows = rows.filter(r => cat.positions.includes(r.posGroup));
     if (catRows.length === 0) return;
+    const isOpen = STATE.exposureOpenCategories[cat.label] !== false;
 
-    wrap.appendChild(el(`<div style="font-weight:700; font-size:13px; margin:16px 0 6px;">${cat.label}</div>`));
+    wrap.appendChild(el(`
+      <div class="row" style="justify-content:space-between; align-items:center; margin:16px 0 6px; cursor:pointer;" onclick="toggleExposureCategory('${cat.label}')">
+        <span style="font-weight:700; font-size:13px;">${isOpen ? "\u25be" : "\u25b8"} ${cat.label}</span>
+        <span class="muted" style="font-size:11px;">${catRows.length} player${catRows.length===1?"":"s"}</span>
+      </div>
+    `));
+    if (!isOpen) return;
+
     const panel = document.createElement("div");
     panel.className = "panel";
     panel.innerHTML = `
@@ -3568,6 +3594,11 @@ function renderExposure() {
 
   return wrap;
 }
+window.toggleExposureCategory = function (label) {
+  const current = STATE.exposureOpenCategories[label] !== false;
+  STATE.exposureOpenCategories[label] = !current;
+  render();
+};
 
 /* =========================================================
    RENDER: COMPARE ROSTERS
