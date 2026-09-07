@@ -3479,7 +3479,7 @@ function leagueSupportsPosition(league, posGroup) {
 
 function renderExposure() {
   const wrap = document.createElement("div");
-  const leagues = getLeagues().filter(l => myTeamFor(l) && getLeagueData(l.id));
+  const leagues = getLeagues().filter(l => l.source !== "manual" && myTeamFor(l) && getLeagueData(l.id));
 
   if (leagues.length === 0) {
     wrap.appendChild(el(`<div class="empty-state"><p>No teams set yet. Set "My team" on a league to see your exposure here.</p></div>`));
@@ -3511,7 +3511,7 @@ function renderExposure() {
     const posGroup = (p && (p.fantasy_positions?.[0] || p.position)) || null;
     const denom = (posGroup && posGroupTeamCount[posGroup] > 0) ? posGroupTeamCount[posGroup] : totalTeams;
     return {
-      id, name: playerName(p, id), badge: badgeInfo(p),
+      id, name: playerName(p, id), badge: badgeInfo(p), posGroup,
       count: counts[id].count, leagueNames: counts[id].leagueNames,
       denom, pct: (counts[id].count / denom) * 100
     };
@@ -3534,24 +3534,38 @@ function renderExposure() {
     return wrap;
   }
 
-  const panel = document.createElement("div");
-  panel.className = "panel";
-  panel.innerHTML = `
-    <table>
-      <thead><tr><th>Player</th><th class="num">Teams</th><th class="num">Share</th></tr></thead>
-      <tbody>
-        ${rows.map(r => `
-          <tr>
-            <td>
-              ${escapeHtml(r.name)} <span class="pbadge" style="background:${r.badge.color}">${r.badge.label}</span>
-              <div class="muted" style="font-size:10px; margin-top:2px;">${r.leagueNames.map(n => escapeHtml(n)).join(", ")}</div>
-            </td>
-            <td class="num mono">${r.count}/${r.denom}</td>
-            <td class="num mono">${r.pct.toFixed(0)}%</td>
-          </tr>`).join("")}
-      </tbody>
-    </table>`;
-  wrap.appendChild(panel);
+  const CATEGORIES = [
+    { label: "Offense", positions: ["QB","RB","WR","TE"] },
+    { label: "IDP", positions: ["DL","LB","DB"] },
+    { label: "K", positions: ["K"] },
+    { label: "DEF", positions: ["DEF"] },
+  ];
+
+  CATEGORIES.forEach(cat => {
+    const catRows = rows.filter(r => cat.positions.includes(r.posGroup));
+    if (catRows.length === 0) return;
+
+    wrap.appendChild(el(`<div style="font-weight:700; font-size:13px; margin:16px 0 6px;">${cat.label}</div>`));
+    const panel = document.createElement("div");
+    panel.className = "panel";
+    panel.innerHTML = `
+      <table>
+        <thead><tr><th>Player</th><th class="num">Teams</th><th class="num">Share</th></tr></thead>
+        <tbody>
+          ${catRows.map(r => `
+            <tr>
+              <td>
+                ${escapeHtml(r.name)} <span class="pbadge" style="background:${r.badge.color}">${r.badge.label}</span>
+                <div class="muted" style="font-size:10px; margin-top:2px;">${r.leagueNames.map(n => escapeHtml(n)).join(", ")}</div>
+              </td>
+              <td class="num mono">${r.count}/${r.denom}</td>
+              <td class="num mono">${r.pct.toFixed(0)}%</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+    wrap.appendChild(panel);
+  });
+
   return wrap;
 }
 
