@@ -1067,13 +1067,13 @@ window.setMatchupsMyOnly = function (v) {
 };
 
 /* -------- matchup detail (boxscore, beta per-player points) -------- */
-window.viewMatchupDetail = async function (leagueId, week, matchupId) {
+window.viewMatchupDetail = async function (leagueId, week, matchupId, forceRefresh) {
   await withLoading(async () => {
     if (!PLAYERS) PLAYERS = await ensurePlayers(false);
     STATE.matchupDetailLeagueId = leagueId;
     STATE.matchupDetailWeek = week;
 
-    let matchups = (STATE.matchupsCache && STATE.matchupsCache[leagueId]) || [];
+    let matchups = forceRefresh ? [] : ((STATE.matchupsCache && STATE.matchupsCache[leagueId]) || []);
     if (!matchups.length) {
       try { matchups = await fetchJSON(`${SLEEPER}/league/${leagueId}/matchups/${week}`) || []; STATE.matchupsCache[leagueId] = matchups; }
       catch (e) { matchups = []; }
@@ -1081,33 +1081,43 @@ window.viewMatchupDetail = async function (leagueId, week, matchupId) {
     const pair = matchups.filter(m => m.matchup_id === matchupId);
     STATE.matchupDetailPair = pair;
 
-    if (!STATE.nflSchedule) {
+    const nflState = await ensureNflState().catch(() => null);
+    const season = (nflState && nflState.season) || String(new Date().getFullYear());
+
+    if (!STATE.nflSchedule || STATE.nflScheduleSeason !== season) {
       try {
-        const res = await fetch(`https://api.sleeper.app/schedule/nfl/regular/2025`);
+        const res = await fetch(`https://api.sleeper.app/schedule/nfl/regular/${season}`);
         STATE.nflSchedule = res.ok ? await res.json() : [];
+        STATE.nflScheduleSeason = season;
       } catch (e) {
         STATE.nflSchedule = [];
       }
     }
 
-    // Fetch actual/projected points for every rostered player - starters, bench, and IR
+    // Fetch actual/projected points for every rostered player - starters, bench, and IR.
+    // Cached entries expire after 30s instead of caching forever for the whole
+    // session, so scores actually update while a game is live rather than
+    // freezing at whatever was true the first time this boxscore was opened.
+    const STALE_MS = 30000;
     const ids = new Set();
     pair.forEach(side => (side.players || []).forEach(id => { if (id && id !== "0") ids.add(id); }));
     STATE.matchupPlayerPoints = STATE.matchupPlayerPoints || {};
     for (const id of ids) {
       const key = `${id}-${week}`;
-      if (STATE.matchupPlayerPoints[key] !== undefined) continue;
+      const cached = STATE.matchupPlayerPoints[key];
+      if (!forceRefresh && cached !== undefined && cached !== null && Date.now() - (cached._fetchedAt || 0) < STALE_MS) continue;
       try {
         const [statRes, projRes] = await Promise.all([
-          fetch(`https://api.sleeper.com/stats/nfl/player/${id}?season_type=regular&season=2025&week=${week}`),
-          fetch(`https://api.sleeper.com/projections/nfl/player/${id}?season_type=regular&season=2025&week=${week}`)
+          fetch(`https://api.sleeper.com/stats/nfl/player/${id}?season_type=regular&season=${season}&week=${week}`),
+          fetch(`https://api.sleeper.com/projections/nfl/player/${id}?season_type=regular&season=${season}&week=${week}`)
         ]);
         STATE.matchupPlayerPoints[key] = {
           stat: statRes.ok ? await statRes.json() : null,
-          proj: projRes.ok ? await projRes.json() : null
+          proj: projRes.ok ? await projRes.json() : null,
+          _fetchedAt: Date.now()
         };
       } catch (e) {
-        STATE.matchupPlayerPoints[key] = null;
+        STATE.matchupPlayerPoints[key] = { stat: null, proj: null, _fetchedAt: Date.now() };
       }
     }
   });
@@ -1903,7 +1913,7 @@ function renderFinder() {
     </div>
     <div class="row" style="margin-top:8px;">
       <button class="btn btn-sm ${STATE.showFinderPoints?'btn-primary':''}" onclick="toggleFinderPoints()">
-        ${STATE.showFinderPoints ? '<span class="spinner"></span>' : ''} 2025 points by league (beta)
+        ${STATE.showFinderPoints ? '<span class="spinner"></span>' : ''} Season points by league (beta)
       </button>
       ${STATE.showFinderPoints ? '<span class="muted" style="font-size:10.5px;">Uses an unofficial Sleeper endpoint - may be unavailable</span>' : ''}
     </div>
@@ -1982,7 +1992,7 @@ function finderWatchlistHtml() {
         else if (statsObj) {
           const hd = getLeagueData(h.leagueId);
           const pts = hd ? computeLeaguePoints(statsObj, hd.league.scoring_settings) : null;
-          pointsText = pts !== null ? ` - ${pts.toFixed(1)} pts (2025)` : "";
+          pointsText = pts !== null ? ` - ${pts.toFixed(1)} pts (${NFL_STATE ? NFL_STATE.season : "season"})` : "";
         }
       }
       return `<div class="finder-hit"><span>${escapeHtml(h.leagueName)} - ${escapeHtml(h.teamName)}${pointsText}</span><span class="muted">${h.status}</span></div>`;
@@ -2025,6 +2035,8 @@ async function fetchPlayerSeasonStats(playerId, season) {
 async function loadFinderPointsForCurrentResults() {
   const q = (STATE.finderQuery || "").trim().toLowerCase();
   if (!q) return;
+  const nflState = await ensureNflState().catch(() => null);
+  const season = (nflState && nflState.season) || String(new Date().getFullYear());
   const leagues = getLeagues();
   const ids = new Set();
   leagues.forEach(l => {
@@ -2037,7 +2049,7 @@ async function loadFinderPointsForCurrentResults() {
   });
   for (const id of ids) {
     if (STATE.playerSeasonStats[id] !== undefined) continue;
-    try { STATE.playerSeasonStats[id] = await fetchPlayerSeasonStats(id, "2025"); }
+    try { STATE.playerSeasonStats[id] = await fetchPlayerSeasonStats(id, season); }
     catch (e) { STATE.playerSeasonStats[id] = null; }
   }
 }
@@ -2052,7 +2064,7 @@ window.toggleFinderPoints = async function () {
 };
 
 /* =========================================================
-   RANKINGS: top 50 by position, 2025 total + points per game
+   RANKINGS: top 50 by position, current season total + points per game
    (beta - relies on the same unofficial stats endpoint as
    Player Finder's points feature)
 ========================================================= */
@@ -2097,13 +2109,15 @@ window.loadRankings = async function () {
     const data = getLeagueData(leagueId);
     const scoring = data ? data.league.scoring_settings : null;
     const key = `${leagueId}|${position}`;
+    const nflState = await ensureNflState().catch(() => null);
+    const season = (nflState && nflState.season) || String(new Date().getFullYear());
 
     if (position === "DEF") {
       // Team defenses have no GSIS id / individual player row - stays on the
       // original unofficial Sleeper endpoint, same as before.
       let rows;
       try {
-        const res = await fetch(`https://api.sleeper.com/stats/nfl/2025?season_type=regular&position[]=DEF&order_by=pts_std`);
+        const res = await fetch(`https://api.sleeper.com/stats/nfl/${season}?season_type=regular&position[]=DEF&order_by=pts_std`);
         if (!res.ok) throw new Error("bad response");
         rows = await res.json();
       } catch (e) {
@@ -2202,7 +2216,7 @@ function renderRankings() {
     return wrap;
   }
   if (rows.length === 0) {
-    wrap.appendChild(el(`<div class="empty-state"><p>No scoreable data found for ${STATE.rankingsPosition} in 2025 yet.</p></div>`));
+    wrap.appendChild(el(`<div class="empty-state"><p>No scoreable data found for ${STATE.rankingsPosition} yet this season.</p></div>`));
     return wrap;
   }
 
@@ -2290,7 +2304,7 @@ window.loadWaiverTargets = async function () {
       // Free agent pool per position - bulk season-total fetch, same source as Rankings
       for (const pos of positions) {
         try {
-          const res = await fetch(`https://api.sleeper.com/stats/nfl/2025?season_type=regular&position[]=${pos}&order_by=pts_std`);
+          const res = await fetch(`https://api.sleeper.com/stats/nfl/${nflState.season}?season_type=regular&position[]=${pos}&order_by=pts_std`);
           poolByPos[pos] = res.ok ? await res.json() : [];
         } catch (e) { poolByPos[pos] = []; }
       }
@@ -2301,7 +2315,7 @@ window.loadWaiverTargets = async function () {
         const merged = {};
         for (const w of weeksToFetch) {
           try {
-            const res = await fetch(`https://api.sleeper.com/${endpoint}/nfl/2025/${w}?season_type=regular&position[]=${pos}`);
+            const res = await fetch(`https://api.sleeper.com/${endpoint}/nfl/${nflState.season}/${w}?season_type=regular&position[]=${pos}`);
             const rows = res.ok ? await res.json() : [];
             rows.forEach(row => {
               const pid = row.player_id || row.playerId;
@@ -2323,7 +2337,7 @@ window.loadWaiverTargets = async function () {
     if (metric === "season") {
       for (const id of (myRoster.players || [])) {
         if (STATE.playerSeasonStats[id] === undefined) {
-          try { STATE.playerSeasonStats[id] = await fetchPlayerSeasonStats(id, "2025"); }
+          try { STATE.playerSeasonStats[id] = await fetchPlayerSeasonStats(id, nflState.season); }
           catch (e) { STATE.playerSeasonStats[id] = null; }
         }
       }
@@ -2333,7 +2347,7 @@ window.loadWaiverTargets = async function () {
         const sum = {}; let weeks = 0;
         for (const w of weeksToFetch) {
           try {
-            const res = await fetch(`https://api.sleeper.com/${endpoint}/nfl/player/${id}?season_type=regular&season=2025&week=${w}`);
+            const res = await fetch(`https://api.sleeper.com/${endpoint}/nfl/player/${id}?season_type=regular&season=${nflState.season}&week=${w}`);
             if (res.ok) {
               const json = await res.json();
               const s = json && (json.stats || json);
@@ -2573,7 +2587,7 @@ function finderResultsHtml() {
         else if (statsObj) {
           const hd = getLeagueData(h.leagueId);
           const pts = hd ? computeLeaguePoints(statsObj, hd.league.scoring_settings) : null;
-          pointsText = pts !== null ? ` - ${pts.toFixed(1)} pts (2025)` : "";
+          pointsText = pts !== null ? ` - ${pts.toFixed(1)} pts (${NFL_STATE ? NFL_STATE.season : "season"})` : "";
         }
       }
       return `<div class="finder-hit"><span>${escapeHtml(h.leagueName)} - ${escapeHtml(h.teamName)}${pointsText}</span><span class="muted">${h.status}</span></div>`;
@@ -2857,7 +2871,12 @@ function renderMatchupDetail() {
   wrap.appendChild(el(`
     <div class="row" style="margin-top:16px; justify-content:space-between;">
       <span style="font-weight:700;">${escapeHtml(league?.nickname || "")} - Week ${week}</span>
-      <button class="btn btn-sm" onclick="navigate('matchups')">Back to Matchups</button>
+      <span class="row" style="gap:6px;">
+        <button class="btn btn-sm" onclick="viewMatchupDetail('${leagueId}', ${week}, ${pair[0]?.matchup_id}, true)" ${STATE.loading?"disabled":""}>
+          ${STATE.loading ? '<span class="spinner"></span>' : ''} Refresh
+        </button>
+        <button class="btn btn-sm" onclick="navigate('matchups')">Back to Matchups</button>
+      </span>
     </div>
     <div class="muted" style="font-size:10.5px; margin-top:4px;">Points, game info, and status use unofficial Sleeper endpoints - beta, may show "-" if unavailable</div>
   `));
@@ -3663,7 +3682,7 @@ window.loadDashboardExtras = async function () {
     STATE.dashboardWeek = week;
     if (!STATE.nflSchedule) {
       try {
-        const res = await fetch(`https://api.sleeper.app/schedule/nfl/regular/2025`);
+        const res = await fetch(`https://api.sleeper.app/schedule/nfl/regular/${state.season}`);
         STATE.nflSchedule = res.ok ? await res.json() : [];
       } catch (e) { STATE.nflSchedule = []; }
     }
