@@ -523,6 +523,52 @@ const BESTBALL_ELIGIBILITY = {
 // player who was only eligible for a more restrictive slot.
 const BESTBALL_SLOT_PRIORITY = ["QB","RB","WR","TE","K","DEF","DL","LB","DB","IDP_FLEX","WRRB_FLEX","REC_FLEX","FLEX","SUPER_FLEX"];
 
+/* =========================================================
+   LIVE SCORES: ESPN's public (unofficial) scoreboard endpoint -
+   Sleeper's own schedule endpoint has no live status or score data
+   at all (confirmed via direct testing: every game always shows
+   "pre_game" regardless of actual state). CORS support for this
+   ESPN endpoint from a browser is unconfirmed - if blocked, this
+   fails quietly and the app falls back to normal scheduled-time
+   display, same as before this feature existed.
+========================================================= */
+// A few teams ESPN abbreviates differently than Sleeper does.
+const ESPN_TEAM_ABBR_FIX = { WSH: "WAS", JAC: "JAX", LA: "LAR" };
+
+async function loadLiveScores(forceRefresh) {
+  if (!forceRefresh && STATE.liveScores && Date.now() - (STATE.liveScoresFetchedAt || 0) < 30000) return;
+  try {
+    const res = await fetch("https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard");
+    if (!res.ok) { STATE.liveScores = STATE.liveScores || {}; return; }
+    const json = await res.json();
+    const scores = {};
+    (json.events || []).forEach(ev => {
+      const comp = ev.competitions && ev.competitions[0];
+      if (!comp) return;
+      const state = comp.status?.type?.state; // "pre" | "in" | "post"
+      const competitors = comp.competitors || [];
+      competitors.forEach(c => {
+        const opp = competitors.find(o => o !== c);
+        if (!c.team?.abbreviation) return;
+        const abbr = ESPN_TEAM_ABBR_FIX[c.team.abbreviation] || c.team.abbreviation;
+        scores[abbr] = {
+          state,
+          isLive: state === "in",
+          isFinal: state === "post",
+          score: c.score,
+          oppAbbr: opp ? (ESPN_TEAM_ABBR_FIX[opp.team?.abbreviation] || opp.team?.abbreviation) : null,
+          oppScore: opp ? opp.score : null,
+          period: comp.status?.type?.shortDetail || comp.status?.displayClock || "",
+        };
+      });
+    });
+    STATE.liveScores = scores;
+    STATE.liveScoresFetchedAt = Date.now();
+  } catch (e) {
+    STATE.liveScores = STATE.liveScores || {}; // fail quietly - CORS or network issue, fall back to scheduled-time display
+  }
+}
+
 function matchupActualPoints(id, week) {
   const entry = STATE.matchupPlayerPoints ? STATE.matchupPlayerPoints[`${id}-${week}`] : null;
   if (!entry || !entry.stat || !STATE.matchupDetailScoring) return 0;
@@ -1211,6 +1257,13 @@ window.viewMatchupDetail = async function (leagueId, week, matchupId, forceRefre
       } catch (e) {
         STATE.nflSchedule = [];
       }
+    }
+
+    // Live scores only mean anything for the actual current week - fetching
+    // them for a past or future week would just be meaningless noise.
+    const currentWeek = nflState ? ((nflState.season_type === "pre" || !nflState.week) ? 1 : nflState.week) : null;
+    if (currentWeek === week) {
+      await loadLiveScores(forceRefresh);
     }
 
     // Fetch actual/projected points for every rostered player - starters, bench, and IR.
@@ -2941,6 +2994,11 @@ function matchupCardHtml(a, rosterA, b, rosterB, users, isMine, leagueId, week) 
 ========================================================= */
 function nflGameInfo(team, week) {
   if (!team) return "";
+  const live = STATE.liveScores ? STATE.liveScores[team] : null;
+  if (live && (live.isLive || live.isFinal)) {
+    const label = live.isLive ? live.period : "Final";
+    return `(${team}) ${live.score}-${live.oppScore} vs ${live.oppAbbr}${label ? " - " + label : ""}`;
+  }
   if (!STATE.nflSchedule) return `(${team})`;
   const game = STATE.nflSchedule.find(g => g.week === week && (g.home === team || g.away === team));
   if (!game) return `(${team})`;
@@ -3059,6 +3117,7 @@ function matchupPlayerMeta(pid, week) {
   const pl = PLAYERS ? PLAYERS[pid] : null;
   const badge = badgeInfo(pl);
   const game = nflGameInfo(pl?.team, week);
+  const isLive = !!(pl?.team && STATE.liveScores && STATE.liveScores[pl.team]?.isLive);
   const key = `${pid}-${week}`;
   const entry = STATE.matchupPlayerPoints ? STATE.matchupPlayerPoints[key] : undefined;
   let actual = "-", proj = "-", statLine = "";
@@ -3069,19 +3128,21 @@ function matchupPlayerMeta(pid, week) {
     if (pp !== null) proj = pp.toFixed(1);
     statLine = formatStatLine(entry.stat);
   }
-  return { pl, badge, game, actual, proj, statusHtml: playerStatusBadge(pl), statLine };
+  return { pl, badge, game, actual, proj, statusHtml: playerStatusBadge(pl), statLine, isLive };
 }
 
 function matchupSlotRowHtml(pidA, pidB, slotLabel, week) {
   const cell = (pid) => {
-    if (!pid || pid === "0") return { id: null, name: "Empty", meta: "", actual: "", proj: "", statusHtml: "", statLine: "" };
+    if (!pid || pid === "0") return { id: null, name: "Empty", meta: "", actual: "", proj: "", statusHtml: "", statLine: "", isLive: false };
     const m = matchupPlayerMeta(pid, week);
-    return { id: pid, name: playerName(m.pl, pid), meta: m.game, actual: m.actual, proj: m.proj, statusHtml: m.statusHtml, statLine: m.statLine };
+    return { id: pid, name: playerName(m.pl, pid), meta: m.game, actual: m.actual, proj: m.proj, statusHtml: m.statusHtml, statLine: m.statLine, isLive: m.isLive };
   };
   const A = cell(pidA);
-  const B = pidB !== undefined ? cell(pidB) : { id: null, name: "", meta: "", actual: "", proj: "", statusHtml: "", statLine: "" };
+  const B = pidB !== undefined ? cell(pidB) : { id: null, name: "", meta: "", actual: "", proj: "", statusHtml: "", statLine: "", isLive: false };
   const clickA = A.id ? `onclick="showStatBreakdown('${A.id}', ${week})" style="cursor:pointer;"` : "";
   const clickB = B.id ? `onclick="showStatBreakdown('${B.id}', ${week})" style="cursor:pointer;"` : "";
+  const liveStyleA = A.isLive ? "background:rgba(95,163,122,0.1); border-left:2px solid var(--win); padding-left:4px;" : "";
+  const liveStyleB = B.isLive ? "background:rgba(95,163,122,0.1); border-right:2px solid var(--win); padding-right:4px;" : "";
 
   const statRow = (A.statLine || B.statLine) ? `
       <div class="mu-statline" style="grid-column:1 / 3; grid-row:3; text-align:left;">${escapeHtml(A.statLine)}</div>
@@ -3089,11 +3150,11 @@ function matchupSlotRowHtml(pidA, pidB, slotLabel, week) {
 
   return `
     <div class="mu-slot-row">
-      <div class="mu-name" style="grid-column:1; grid-row:1; text-align:left;">${escapeHtml(A.name)} ${A.statusHtml}</div>
+      <div class="mu-name" style="grid-column:1; grid-row:1; text-align:left; ${liveStyleA}">${escapeHtml(A.name)} ${A.statusHtml}</div>
       <div class="mu-score" ${clickA} style="grid-column:2; grid-row:1; text-align:right;">${A.actual}</div>
       <div class="mu-slot-label" style="grid-column:3; grid-row:1 / 3;">${slotLabel}</div>
       <div class="mu-score" ${clickB} style="grid-column:4; grid-row:1; text-align:left;">${B.actual}</div>
-      <div class="mu-name" style="grid-column:5; grid-row:1; text-align:right;">${B.statusHtml} ${escapeHtml(B.name)}</div>
+      <div class="mu-name" style="grid-column:5; grid-row:1; text-align:right; ${liveStyleB}">${B.statusHtml} ${escapeHtml(B.name)}</div>
       <div class="mu-meta" style="grid-column:1; grid-row:2; text-align:left;">${escapeHtml(A.meta)}</div>
       <div class="mu-score-sub" style="grid-column:2; grid-row:2; text-align:right;">${A.proj}</div>
       <div class="mu-score-sub" style="grid-column:4; grid-row:2; text-align:left;">${B.proj}</div>
@@ -3120,7 +3181,7 @@ function renderMatchupDetail() {
         <button class="btn btn-sm" onclick="navigate('matchups')">Back to Matchups</button>
       </span>
     </div>
-    <div class="muted" style="font-size:10.5px; margin-top:4px;">Points, game info, and status use unofficial Sleeper endpoints - beta, may show "-" if unavailable</div>
+    <div class="muted" style="font-size:10.5px; margin-top:4px;">Points, game info, and status use unofficial Sleeper endpoints - beta, may show "-" if unavailable. Live in-game scores (highlighted players) use a separate unofficial ESPN endpoint and may not load in every browser.</div>
   `));
 
   if (pair.length === 0 || !data) {
