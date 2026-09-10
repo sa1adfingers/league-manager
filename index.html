@@ -496,6 +496,65 @@ function starterSlots(league) {
   if (!league?.roster_positions) return [];
   return league.roster_positions.filter(p => !["BN","IR","TAXI"].includes(p));
 }
+
+/* =========================================================
+   BEST BALL: Sleeper's own app continuously re-optimizes the
+   starting lineup as stats come in during the week, but the raw
+   matchups API's "starters" field doesn't reflect that live
+   recalculation - it's a static/provisional value. Since we
+   already fetch every rostered player's current points, this
+   recomputes the true optimal lineup the same way: highest
+   scorers fill the most restrictive eligible slots first. This
+   is a greedy heuristic, not a provably-perfect solver, but
+   should match Sleeper's real algorithm in the vast majority of
+   realistic cases.
+========================================================= */
+const BESTBALL_ELIGIBILITY = {
+  QB: ["QB"], RB: ["RB"], WR: ["WR"], TE: ["TE"], K: ["K"], DEF: ["DEF"],
+  DL: ["DL"], LB: ["LB"], DB: ["DB"],
+  IDP_FLEX: ["DL","LB","DB"],
+  WRRB_FLEX: ["WR","RB"],
+  REC_FLEX: ["WR","TE"],
+  FLEX: ["RB","WR","TE"],
+  SUPER_FLEX: ["QB","RB","WR","TE"],
+};
+// Fill order: dedicated single-position slots first, then flex slots
+// narrowest-eligibility to broadest, so a flex slot never "steals" a
+// player who was only eligible for a more restrictive slot.
+const BESTBALL_SLOT_PRIORITY = ["QB","RB","WR","TE","K","DEF","DL","LB","DB","IDP_FLEX","WRRB_FLEX","REC_FLEX","FLEX","SUPER_FLEX"];
+
+function computeBestBallStarters(playerIds, positionSlots, week) {
+  const pointsFor = (id) => {
+    const entry = STATE.matchupPlayerPoints ? STATE.matchupPlayerPoints[`${id}-${week}`] : null;
+    if (!entry || !entry.stat || !STATE.matchupDetailScoring) return 0;
+    const pts = computeLeaguePoints(entry.stat, STATE.matchupDetailScoring);
+    return pts || 0;
+  };
+
+  const fillOrder = positionSlots.map((slot, idx) => ({ slot, idx })).sort((a, b) => {
+    const pa = BESTBALL_SLOT_PRIORITY.indexOf(a.slot), pb = BESTBALL_SLOT_PRIORITY.indexOf(b.slot);
+    return (pa === -1 ? 999 : pa) - (pb === -1 ? 999 : pb);
+  });
+
+  const available = (playerIds || []).filter(id => id && id !== "0").map(id => {
+    const p = PLAYERS ? PLAYERS[id] : null;
+    return { id, points: pointsFor(id), positions: (p && (p.fantasy_positions || [p.position])) || [] };
+  });
+
+  const result = new Array(positionSlots.length).fill("0");
+  const used = new Set();
+  fillOrder.forEach(({ slot, idx }) => {
+    const eligible = BESTBALL_ELIGIBILITY[slot] || [slot];
+    let best = null;
+    for (const p of available) {
+      if (used.has(p.id)) continue;
+      if (!p.positions.some(pos => eligible.includes(pos))) continue;
+      if (!best || p.points > best.points) best = p;
+    }
+    if (best) { result[idx] = best.id; used.add(best.id); }
+  });
+  return result;
+}
 function fmtTime(ts) {
   if (!ts) return "never";
   const d = new Date(ts);
@@ -2892,6 +2951,15 @@ function renderMatchupDetail() {
   STATE.matchupDetailScoring = data.league.scoring_settings;
   const slots = starterSlots(data.league);
 
+  // Best ball leagues: Sleeper's own app continuously re-optimizes the
+  // lineup as stats come in - the raw "starters" field doesn't reflect
+  // that, so recompute it here instead of trusting the stale value.
+  const isBestBall = data.league.settings?.best_ball === 1;
+  if (isBestBall) {
+    sideA.starters = computeBestBallStarters(sideA.players, slots, week);
+    if (sideB) sideB.starters = computeBestBallStarters(sideB.players, slots, week);
+  }
+
   const panel = document.createElement("div");
   panel.className = "panel";
   panel.style.padding = "14px";
@@ -2903,7 +2971,8 @@ function renderMatchupDetail() {
       <span class="mono" style="font-weight:800; font-size:16px;">${(sideA.points||0).toFixed(2)}</span>
       <span class="mono" style="font-weight:800; font-size:16px;">${sideB ? (sideB.points||0).toFixed(2) : "-"}</span>
       <span style="font-weight:800; font-size:16px; color:var(--gold); text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${sideB ? escapeHtml(rosterB ? teamLabel(rosterB, data.users) : "Roster " + sideB.roster_id) : "Bye"}</span>
-    </div>`;
+    </div>
+    ${isBestBall ? `<div class="muted" style="font-size:10px; margin-bottom:8px;">Best ball - starting lineup recomputed from current points, not Sleeper's raw (and often stale mid-week) starters field</div>` : ""}`;
 
   (sideA.starters || []).forEach((pidA, idx) => {
     const pidB = sideB ? (sideB.starters || [])[idx] : undefined;
