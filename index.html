@@ -523,13 +523,15 @@ const BESTBALL_ELIGIBILITY = {
 // player who was only eligible for a more restrictive slot.
 const BESTBALL_SLOT_PRIORITY = ["QB","RB","WR","TE","K","DEF","DL","LB","DB","IDP_FLEX","WRRB_FLEX","REC_FLEX","FLEX","SUPER_FLEX"];
 
+function matchupActualPoints(id, week) {
+  const entry = STATE.matchupPlayerPoints ? STATE.matchupPlayerPoints[`${id}-${week}`] : null;
+  if (!entry || !entry.stat || !STATE.matchupDetailScoring) return 0;
+  const pts = computeLeaguePoints(entry.stat, STATE.matchupDetailScoring);
+  return pts || 0;
+}
+
 function computeBestBallStarters(playerIds, positionSlots, week) {
-  const pointsFor = (id) => {
-    const entry = STATE.matchupPlayerPoints ? STATE.matchupPlayerPoints[`${id}-${week}`] : null;
-    if (!entry || !entry.stat || !STATE.matchupDetailScoring) return 0;
-    const pts = computeLeaguePoints(entry.stat, STATE.matchupDetailScoring);
-    return pts || 0;
-  };
+  const pointsFor = (id) => matchupActualPoints(id, week);
 
   const fillOrder = positionSlots.map((slot, idx) => ({ slot, idx })).sort((a, b) => {
     const pa = BESTBALL_SLOT_PRIORITY.indexOf(a.slot), pb = BESTBALL_SLOT_PRIORITY.indexOf(b.slot);
@@ -1103,10 +1105,11 @@ window.setMyTeam = async function (leagueId, rosterId) {
 /* -------- matchups -------- */
 window.loadMatchups = async function (week) {
   await withLoading(async () => {
+    const nflState = await ensureNflState();
     if (!week) {
-      const state = await ensureNflState();
-      week = (state.season_type === "pre" || !state.week) ? 1 : state.week;
+      week = (nflState.season_type === "pre" || !nflState.week) ? 1 : nflState.week;
     }
+    const season = nflState.season || String(new Date().getFullYear());
     const leagues = getLeagues().filter(l => l.source !== "manual");
     const cache = {};
     for (const l of leagues) {
@@ -1115,6 +1118,30 @@ window.loadMatchups = async function (week) {
     }
     STATE.matchupWeek = week;
     STATE.matchupsCache = cache;
+
+    // Best ball leagues need each player's actual points to correct their
+    // displayed total (Sleeper's raw total reflects their own stale starters
+    // selection, not the live-optimal one) - fetch those here too, but only
+    // for best-ball leagues, since everyone else's total is already correct.
+    if (!PLAYERS) PLAYERS = await ensurePlayers(false);
+    STATE.matchupPlayerPoints = STATE.matchupPlayerPoints || {};
+    for (const l of leagues) {
+      const data = getLeagueData(l.id);
+      if (!data || data.league.settings?.best_ball !== 1) continue;
+      const ids = new Set();
+      (cache[l.id] || []).forEach(m => (m.players || []).forEach(id => { if (id && id !== "0") ids.add(id); }));
+      for (const id of ids) {
+        const key = `${id}-${week}`;
+        const cached = STATE.matchupPlayerPoints[key];
+        if (cached !== undefined && cached !== null && Date.now() - (cached._fetchedAt || 0) < 30000) continue;
+        try {
+          const statRes = await fetch(`https://api.sleeper.com/stats/nfl/player/${id}?season_type=regular&season=${season}&week=${week}`);
+          STATE.matchupPlayerPoints[key] = { stat: statRes.ok ? await statRes.json() : null, proj: null, _fetchedAt: Date.now() };
+        } catch (e) {
+          STATE.matchupPlayerPoints[key] = { stat: null, proj: null, _fetchedAt: Date.now() };
+        }
+      }
+    }
   });
 };
 window.goMatchups = function () {
@@ -2755,11 +2782,22 @@ function renderMatchups() {
     wrap.appendChild(el(`<div style="font-weight:700; margin:18px 0 8px;">${escapeHtml(l.nickname)}</div>`));
     const grid = document.createElement("div");
     grid.className = "roster-grid";
+    const isBestBall = data.league.settings?.best_ball === 1;
+    const slots = isBestBall ? starterSlots(data.league) : null;
     if (pairs.length === 0) {
       grid.appendChild(el(`<div class="muted" style="font-size:12px;">No matchup data for week ${week || "?"} yet.</div>`));
     } else {
       pairs.forEach(pair => {
         const [a, b] = pair;
+        if (isBestBall) {
+          STATE.matchupDetailScoring = data.league.scoring_settings;
+          const startersA = computeBestBallStarters(a.players, slots, week);
+          a.points = startersA.reduce((sum, id) => sum + (id && id !== "0" ? matchupActualPoints(id, week) : 0), 0);
+          if (b) {
+            const startersB = computeBestBallStarters(b.players, slots, week);
+            b.points = startersB.reduce((sum, id) => sum + (id && id !== "0" ? matchupActualPoints(id, week) : 0), 0);
+          }
+        }
         const rosterA = data.rosters.find(r => r.roster_id === a.roster_id);
         const rosterB = b ? data.rosters.find(r => r.roster_id === b.roster_id) : null;
         const myRosterId = myTeamFor(l);
@@ -3102,7 +3140,11 @@ function renderMatchupDetail() {
   const isBestBall = data.league.settings?.best_ball === 1;
   if (isBestBall) {
     sideA.starters = computeBestBallStarters(sideA.players, slots, week);
-    if (sideB) sideB.starters = computeBestBallStarters(sideB.players, slots, week);
+    sideA.points = sideA.starters.reduce((sum, id) => sum + (id && id !== "0" ? matchupActualPoints(id, week) : 0), 0);
+    if (sideB) {
+      sideB.starters = computeBestBallStarters(sideB.players, slots, week);
+      sideB.points = sideB.starters.reduce((sum, id) => sum + (id && id !== "0" ? matchupActualPoints(id, week) : 0), 0);
+    }
   }
 
   const panel = document.createElement("div");
