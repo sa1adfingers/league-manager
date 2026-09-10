@@ -642,6 +642,7 @@ let STATE = {
   matchupWeek: null,
   matchupsCache: {},
   matchupsMyOnly: true,
+  matchupsViewMode: "league",
   matchupDetailLeagueId: null,
   matchupDetailWeek: null,
   matchupDetailPair: null,
@@ -1122,6 +1123,38 @@ window.goMatchups = function () {
 };
 window.setMatchupsMyOnly = function (v) {
   STATE.matchupsMyOnly = v;
+  render();
+};
+
+window.setMatchupsViewMode = function (mode) {
+  STATE.matchupsViewMode = mode;
+  if (mode === "game") loadGameCenterData();
+  else render();
+};
+
+// Loads whatever's missing for the "By Game" view: the NFL schedule (shared
+// with Matchup Detail's cache) and this week's matchups for every league
+// where "My team" is set (so we know both my roster and my opponent's).
+window.loadGameCenterData = async function () {
+  await withLoading(async () => {
+    if (!PLAYERS) PLAYERS = await ensurePlayers(false);
+    const week = STATE.matchupWeek || 1;
+    const nflState = await ensureNflState().catch(() => null);
+    const season = (nflState && nflState.season) || String(new Date().getFullYear());
+    if (!STATE.nflSchedule || STATE.nflScheduleSeason !== season) {
+      try {
+        const res = await fetch(`https://api.sleeper.app/schedule/nfl/regular/${season}`);
+        STATE.nflSchedule = res.ok ? await res.json() : [];
+        STATE.nflScheduleSeason = season;
+      } catch (e) { STATE.nflSchedule = []; }
+    }
+    const leagues = getLeagues().filter(l => l.source !== "manual" && myTeamFor(l));
+    STATE.matchupsCache = STATE.matchupsCache || {};
+    for (const l of leagues) {
+      try { STATE.matchupsCache[l.id] = await fetchJSON(`${SLEEPER}/league/${l.id}/matchups/${week}`) || []; }
+      catch (e) { STATE.matchupsCache[l.id] = []; }
+    }
+  });
   render();
 };
 
@@ -2673,20 +2706,28 @@ function renderMatchups() {
   const wrap = document.createElement("div");
   const week = STATE.matchupWeek;
   wrap.appendChild(el(`
-    <div class="row" style="margin-top:16px; justify-content:space-between;">
-      <div class="row">
+    <div class="row" style="margin-top:16px; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+      <div class="row" style="flex-wrap:wrap;">
         <span class="muted" style="font-size:12px;">Week</span>
         <select onchange="loadMatchups(parseInt(this.value))">
           ${Array.from({length:18},(_,i)=>i+1).map(w=>`<option value="${w}" ${w===week?"selected":""}>${w}</option>`).join("")}
         </select>
         <button class="btn btn-sm ${!STATE.matchupsMyOnly?'btn-primary':''}" onclick="setMatchupsMyOnly(false)">All matchups</button>
         <button class="btn btn-sm ${STATE.matchupsMyOnly?'btn-primary':''}" onclick="setMatchupsMyOnly(true)">My matchups</button>
+        <span style="width:1px; align-self:stretch; background:var(--line); margin:0 4px;"></span>
+        <button class="btn btn-sm ${STATE.matchupsViewMode==='league'?'btn-primary':''}" onclick="setMatchupsViewMode('league')">By League</button>
+        <button class="btn btn-sm ${STATE.matchupsViewMode==='game'?'btn-primary':''}" onclick="setMatchupsViewMode('game')">By Game</button>
       </div>
       <button class="btn btn-sm" onclick="loadMatchups(${week||1})" ${STATE.loading?"disabled":""}>
         ${STATE.loading ? '<span class="spinner"></span>' : ''} Refresh
       </button>
     </div>
   `));
+
+  if (STATE.matchupsViewMode === "game") {
+    wrap.appendChild(renderMatchupsByGame(week));
+    return wrap;
+  }
 
   const leagues = getLeagues().filter(l => !isDismissedByMe(l));
   if (leagues.length === 0) {
@@ -2735,6 +2776,110 @@ function renderMatchups() {
 
   return wrap;
 }
+/* =========================================================
+   MATCHUPS - BY GAME VIEW: instead of one card per league, this
+   groups every player across every league by the actual NFL game
+   they're playing in - "who do I have in KC @ BUF this week, and
+   who do my opponents have there too."
+========================================================= */
+function renderMatchupsByGame(week) {
+  const wrap = document.createElement("div");
+  const schedule = (STATE.nflSchedule || []).filter(g => g.week === week);
+
+  if (schedule.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>No schedule data loaded for week ${week || "?"} yet. Try Refresh.</p></div>`));
+    return wrap;
+  }
+
+  const gamesByTeam = {};
+  schedule.forEach(g => { gamesByTeam[g.home] = g; gamesByTeam[g.away] = g; });
+  const gameKey = g => `${g.away}@${g.home}`;
+  const gameData = {};
+  schedule.forEach(g => { gameData[gameKey(g)] = { game: g, myPlayers: [], oppPlayers: [] }; });
+
+  const leagues = getLeagues().filter(l => myTeamFor(l) && getLeagueData(l.id));
+  leagues.forEach(l => {
+    const data = getLeagueData(l.id);
+    const myRosterId = myTeamFor(l);
+    const myRoster = data.rosters.find(r => String(r.roster_id) === String(myRosterId));
+    if (!myRoster) return;
+
+    (myRoster.players || []).forEach(pid => {
+      const p = PLAYERS ? PLAYERS[pid] : null;
+      const g = p && p.team && gamesByTeam[p.team];
+      if (!g) return;
+      gameData[gameKey(g)].myPlayers.push({ playerId: pid, leagueName: l.nickname });
+    });
+
+    // Opponent rosters need live weekly matchup pairing, which only exists
+    // for Sleeper leagues - manual (ESPN) leagues only contribute to "my players" above.
+    if (l.source === "manual") return;
+    const matchups = (STATE.matchupsCache && STATE.matchupsCache[l.id]) || [];
+    const mine = matchups.find(m => String(m.roster_id) === String(myRosterId));
+    if (!mine) return;
+    const opp = matchups.find(m => m.matchup_id === mine.matchup_id && String(m.roster_id) !== String(myRosterId));
+    if (!opp) return;
+    const oppRoster = data.rosters.find(r => r.roster_id === opp.roster_id);
+    const oppName = oppRoster ? teamLabel(oppRoster, data.users) : "Opponent";
+    (opp.players || []).forEach(pid => {
+      const p = PLAYERS ? PLAYERS[pid] : null;
+      const g = p && p.team && gamesByTeam[p.team];
+      if (!g) return;
+      gameData[gameKey(g)].oppPlayers.push({ playerId: pid, leagueName: l.nickname, opponentName: oppName });
+    });
+  });
+
+  const games = Object.values(gameData)
+    .filter(gd => gd.myPlayers.length || gd.oppPlayers.length)
+    .sort((a, b) => new Date(a.game.date || 0) - new Date(b.game.date || 0));
+
+  if (games.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>No rostered players found in this week's games yet - try Refresh, or set "My team" on more leagues.</p></div>`));
+    return wrap;
+  }
+
+  const playerRow = (entry, extra) => {
+    const p = PLAYERS ? PLAYERS[entry.playerId] : null;
+    const badge = badgeInfo(p);
+    return `<div class="prow" style="justify-content:space-between;">
+      <span class="pname">${escapeHtml(playerName(p, entry.playerId))} <span class="pbadge" style="background:${badge.color}">${badge.label}</span></span>
+      <span class="muted" style="font-size:10.5px;">${escapeHtml(extra)}</span>
+    </div>`;
+  };
+
+  games.forEach(({ game, myPlayers, oppPlayers }) => {
+    let dateText = "";
+    if (game.date) {
+      const d = new Date(game.date);
+      if (!isNaN(d.getTime())) {
+        dateText = d.toLocaleDateString([], { weekday: "short" });
+        if (game.date.includes("T") || game.date.includes(":")) {
+          dateText += " " + d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+        }
+      }
+    }
+    const panel = document.createElement("div");
+    panel.className = "panel";
+    panel.style.padding = "14px";
+    panel.style.marginTop = "14px";
+    panel.innerHTML = `
+      <div class="row" style="justify-content:space-between;">
+        <span style="font-weight:800; font-size:14px; color:var(--gold);">${escapeHtml(game.away)} @ ${escapeHtml(game.home)}</span>
+        <span class="muted mono" style="font-size:11px;">${escapeHtml(dateText)}</span>
+      </div>
+      ${myPlayers.length ? `
+        <div class="rcard-section-label" style="margin-top:10px;">Your players</div>
+        ${myPlayers.map(e => playerRow(e, e.leagueName)).join("")}` : ""}
+      ${oppPlayers.length ? `
+        <div class="rcard-section-label" style="margin-top:10px;">Opponent players</div>
+        ${oppPlayers.map(e => playerRow(e, `${e.opponentName} - ${e.leagueName}`)).join("")}` : ""}
+    `;
+    wrap.appendChild(panel);
+  });
+
+  return wrap;
+}
+
 function matchupCardHtml(a, rosterA, b, rosterB, users, isMine, leagueId, week) {
   const nameA = rosterA ? teamLabel(rosterA, users) : `Roster ${a.roster_id}`;
   const nameB = rosterB ? teamLabel(rosterB, users) : (b ? `Roster ${b.roster_id}` : "Bye");
