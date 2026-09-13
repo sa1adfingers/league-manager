@@ -2829,6 +2829,11 @@ function renderMatchups() {
     </div>
   `));
 
+  if (week === null) {
+    wrap.appendChild(el(`<div class="empty-state"><p>Loading matchups...</p></div>`));
+    return wrap;
+  }
+
   if (STATE.matchupsViewMode === "game") {
     wrap.appendChild(renderMatchupsByGame(week));
     return wrap;
