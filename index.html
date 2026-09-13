@@ -1562,7 +1562,7 @@ function computeStarterAlerts() {
       const p = PLAYERS ? PLAYERS[pid] : null;
       if (!p) return;
       const name = playerName(p, pid);
-      if (p.injury_status) {
+      if (["NA", "Doubtful", "Out"].includes(p.injury_status)) {
         alerts.push({ league: l.nickname, name, detail: p.injury_status, kind: "status" });
       }
       if (p.team && STATE.nflSchedule && STATE.nflSchedule.length) {
