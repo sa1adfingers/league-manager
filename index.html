@@ -708,6 +708,7 @@ let STATE = {
   matchupDetailScoring: null,
   waiverTargetsLeagueId: null,
   manualEditorOpen: {},
+  bestBallAlertsOpen: false,
   manualRosterOpen: {},
   manualRosterResult: {},
   waiverTargetsData: null,
@@ -986,6 +987,11 @@ function renderManualTeamsEditor(leagueId, data) {
 window.toggleManualEditor = function (leagueId) {
   const current = STATE.manualEditorOpen[leagueId] !== undefined ? STATE.manualEditorOpen[leagueId] : (getLeagueData(leagueId)?.rosters.length === 0);
   STATE.manualEditorOpen[leagueId] = !current;
+  render();
+};
+
+window.toggleBestBallAlerts = function () {
+  STATE.bestBallAlertsOpen = !STATE.bestBallAlertsOpen;
   render();
 };
 
@@ -1664,21 +1670,33 @@ function renderDashboard() {
     return b.isStarter - a.isStarter;
   });
   const playersCache = getPlayersCache();
+  const managedAlerts = alerts.filter(a => a.isManaged);
+  const bestBallAlerts = alerts.filter(a => !a.isManaged);
   if (leagues.some(l => myTeamFor(l))) {
     wrap.appendChild(el(`
-      <div class="panel" style="padding:12px 14px; margin-top:16px; ${alerts.length ? 'border-color:var(--loss);' : ''}">
-        <div class="row" style="justify-content:space-between; margin-bottom:${alerts.length ? '6px' : '0'};">
-          <div style="font-size:11px; font-weight:700; ${alerts.length ? 'color:var(--loss);' : 'color:var(--text-faint);'} letter-spacing:0.06em;">LINEUP ALERTS - WEEK ${STATE.dashboardWeek || "?"}</div>
+      <div class="panel" style="padding:12px 14px; margin-top:16px; ${managedAlerts.length ? 'border-color:var(--loss);' : ''}">
+        <div class="row" style="justify-content:space-between; margin-bottom:${managedAlerts.length ? '6px' : '0'};">
+          <div style="font-size:11px; font-weight:700; ${managedAlerts.length ? 'color:var(--loss);' : 'color:var(--text-faint);'} letter-spacing:0.06em;">LINEUP ALERTS - WEEK ${STATE.dashboardWeek || "?"}</div>
           <span class="row" style="gap:6px;">
             <span class="muted" style="font-size:10px;">Player data: ${fmtAgo(playersCache?.updatedAt)}</span>
             <button class="btn btn-sm" onclick="refreshPlayers()" ${STATE.loading?"disabled":""}>${STATE.loading ? '<span class="spinner"></span>' : ''} Refresh</button>
           </span>
         </div>
-        ${alerts.length ? alerts.map(a => `
+        ${managedAlerts.length ? managedAlerts.map(a => `
             <div class="prow" style="justify-content:space-between;">
-              <span>${escapeHtml(a.name)} <span class="muted">(${escapeHtml(a.league)})</span>${a.isManaged ? ' <span class="pbadge" style="background:var(--text-faint);">MANAGED</span>' : (!a.isStarter ? ' <span class="muted" style="font-size:10px;">bench</span>' : '')}</span>
+              <span>${escapeHtml(a.name)} <span class="muted">(${escapeHtml(a.league)})</span>${!a.isStarter ? ' <span class="muted" style="font-size:10px;">bench</span>' : ''}</span>
               <span class="pbadge" style="background:${a.kind==='bye' ? 'var(--text-faint)' : 'var(--gold)'};">${escapeHtml(a.detail)}</span>
             </div>`).join("") : ""}
+        ${bestBallAlerts.length ? `
+          <div class="row" style="justify-content:space-between; align-items:center; cursor:pointer; margin-top:${managedAlerts.length ? '10px' : '0'}; padding-top:${managedAlerts.length ? '8px' : '0'}; ${managedAlerts.length ? 'border-top:1px solid var(--line);' : ''}" onclick="toggleBestBallAlerts()">
+            <span class="muted" style="font-size:11px;">${STATE.bestBallAlertsOpen ? "\u25be" : "\u25b8"} ${bestBallAlerts.length} best ball alert${bestBallAlerts.length===1?"":"s"} (not urgent - auto-managed)</span>
+          </div>
+          ${STATE.bestBallAlertsOpen ? bestBallAlerts.map(a => `
+            <div class="prow" style="justify-content:space-between;">
+              <span>${escapeHtml(a.name)} <span class="muted">(${escapeHtml(a.league)})</span></span>
+              <span class="pbadge" style="background:${a.kind==='bye' ? 'var(--text-faint)' : 'var(--gold)'};">${escapeHtml(a.detail)}</span>
+            </div>`).join("") : ""}
+        ` : ""}
       </div>
     `));
   }
