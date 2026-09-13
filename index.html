@@ -1573,7 +1573,10 @@ function computeStarterAlerts() {
     // lineup as the week progresses anyway, so starter/bench position isn't
     // meaningful here - just tag which leagues are managed so they can sort
     // to the top, without needing to compute anything extra.
-    const isManaged = data.league.settings?.best_ball === 1;
+    // "Managed" = the user actively sets this lineup every week - the
+    // OPPOSITE of best ball, where Sleeper auto-optimizes it and there's
+    // nothing for the user to manage. Confirmed against real league data.
+    const isManaged = data.league.settings?.best_ball !== 1;
     const starterSet = new Set((roster.starters || []).filter(id => id && id !== "0"));
 
     // Injury status covers the whole roster, not just starters - an OUT
