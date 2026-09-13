@@ -608,6 +608,15 @@ function fmtTime(ts) {
   const d = new Date(ts);
   return d.toLocaleDateString([], {month:"short", day:"numeric"}) + " " + d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
 }
+function fmtAgo(ts) {
+  if (!ts) return "never";
+  const secs = Math.floor((Date.now() - ts) / 1000);
+  if (secs < 5) return "just now";
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  return fmtTime(ts);
+}
 
 /* =========================================================
    WAIVER SCHEDULE
@@ -1188,6 +1197,7 @@ window.loadMatchups = async function (week) {
         }
       }
     }
+    STATE.matchupsFetchedAt = Date.now();
   });
 };
 window.goMatchups = function () {
@@ -1293,6 +1303,7 @@ window.viewMatchupDetail = async function (leagueId, week, matchupId, forceRefre
       }
     }
   });
+  STATE.matchupDetailFetchedAt = Date.now();
   navigate("matchupdetail");
 };
 
@@ -1557,17 +1568,26 @@ function computeStarterAlerts() {
     const rosterId = myTeamFor(l);
     const roster = data.rosters.find(r => String(r.roster_id) === String(rosterId));
     if (!roster) return;
+    // Injury status covers the whole roster, not just starters - an OUT
+    // bench player is still worth knowing about (trade/drop decisions etc).
+    (roster.players || []).forEach(pid => {
+      if (!pid || pid === "0") return;
+      const p = PLAYERS ? PLAYERS[pid] : null;
+      if (!p) return;
+      if (["NA", "Doubtful", "Out"].includes(p.injury_status)) {
+        alerts.push({ league: l.nickname, name: playerName(p, pid), detail: p.injury_status, kind: "status" });
+      }
+    });
+    // Bye-week alerts stay starters-only - a benched player on bye doesn't
+    // need swapping out (they're already benched), and most rosters have
+    // some bench player on bye most weeks, which would just be noise.
     (roster.starters || []).forEach(pid => {
       if (!pid || pid === "0") return;
       const p = PLAYERS ? PLAYERS[pid] : null;
       if (!p) return;
-      const name = playerName(p, pid);
-      if (["NA", "Doubtful", "Out"].includes(p.injury_status)) {
-        alerts.push({ league: l.nickname, name, detail: p.injury_status, kind: "status" });
-      }
       if (p.team && STATE.nflSchedule && STATE.nflSchedule.length) {
         const hasGame = STATE.nflSchedule.some(g => g.week === STATE.dashboardWeek && (g.home === p.team || g.away === p.team));
-        if (!hasGame) alerts.push({ league: l.nickname, name, detail: "Bye", kind: "bye" });
+        if (!hasGame) alerts.push({ league: l.nickname, name: playerName(p, pid), detail: "Bye", kind: "bye" });
       }
     });
   });
@@ -2798,9 +2818,12 @@ function renderMatchups() {
         <button class="btn btn-sm ${STATE.matchupsViewMode==='league'?'btn-primary':''}" onclick="setMatchupsViewMode('league')">By League</button>
         <button class="btn btn-sm ${STATE.matchupsViewMode==='game'?'btn-primary':''}" onclick="setMatchupsViewMode('game')">By Game</button>
       </div>
-      <button class="btn btn-sm" onclick="loadMatchups(${week||1})" ${STATE.loading?"disabled":""}>
-        ${STATE.loading ? '<span class="spinner"></span>' : ''} Refresh
-      </button>
+      <div class="row" style="gap:8px;">
+        <span class="muted" style="font-size:11px;">Updated ${fmtAgo(STATE.matchupsFetchedAt)}</span>
+        <button class="btn btn-sm" onclick="loadMatchups(${week||1})" ${STATE.loading?"disabled":""}>
+          ${STATE.loading ? '<span class="spinner"></span>' : ''} Refresh
+        </button>
+      </div>
     </div>
   `));
 
@@ -3175,6 +3198,7 @@ function renderMatchupDetail() {
     <div class="row" style="margin-top:16px; justify-content:space-between;">
       <span style="font-weight:700;">${escapeHtml(league?.nickname || "")} - Week ${week}</span>
       <span class="row" style="gap:6px;">
+        <span class="muted" style="font-size:11px;">Updated ${fmtAgo(STATE.matchupDetailFetchedAt)}</span>
         <button class="btn btn-sm" onclick="viewMatchupDetail('${leagueId}', ${week}, ${pair[0]?.matchup_id}, true)" ${STATE.loading?"disabled":""}>
           ${STATE.loading ? '<span class="spinner"></span>' : ''} Refresh
         </button>
