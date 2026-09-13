@@ -1568,7 +1568,20 @@ function computeStarterAlerts() {
     const rosterId = myTeamFor(l);
     const roster = data.rosters.find(r => String(r.roster_id) === String(rosterId));
     if (!roster) return;
-    const starterSet = new Set((roster.starters || []).filter(id => id && id !== "0"));
+
+    // Best ball: "starters" isn't a fixed user choice, Sleeper's own app
+    // continuously re-optimizes it from live points - use the same real
+    // computed lineup as Matchup Detail instead of the stale raw field.
+    const isManaged = data.league.settings?.best_ball === 1;
+    let currentStarters;
+    if (isManaged) {
+      STATE.matchupDetailScoring = data.league.scoring_settings;
+      currentStarters = computeBestBallStarters(roster.players, starterSlots(data.league), STATE.dashboardWeek);
+    } else {
+      currentStarters = roster.starters || [];
+    }
+    const starterSet = new Set(currentStarters.filter(id => id && id !== "0"));
+
     // Injury status covers the whole roster, not just starters - an OUT
     // bench player is still worth knowing about (trade/drop decisions etc),
     // but tagged separately so it doesn't read as urgent the way a starter does.
@@ -1577,19 +1590,19 @@ function computeStarterAlerts() {
       const p = PLAYERS ? PLAYERS[pid] : null;
       if (!p) return;
       if (["NA", "Doubtful", "Out"].includes(p.injury_status)) {
-        alerts.push({ league: l.nickname, name: playerName(p, pid), detail: p.injury_status, kind: "status", isStarter: starterSet.has(pid) });
+        alerts.push({ league: l.nickname, name: playerName(p, pid), detail: p.injury_status, kind: "status", isStarter: starterSet.has(pid), isManaged });
       }
     });
     // Bye-week alerts stay starters-only - a benched player on bye doesn't
     // need swapping out (they're already benched), and most rosters have
     // some bench player on bye most weeks, which would just be noise.
-    (roster.starters || []).forEach(pid => {
+    currentStarters.forEach(pid => {
       if (!pid || pid === "0") return;
       const p = PLAYERS ? PLAYERS[pid] : null;
       if (!p) return;
       if (p.team && STATE.nflSchedule && STATE.nflSchedule.length) {
         const hasGame = STATE.nflSchedule.some(g => g.week === STATE.dashboardWeek && (g.home === p.team || g.away === p.team));
-        if (!hasGame) alerts.push({ league: l.nickname, name: playerName(p, pid), detail: "Bye", kind: "bye", isStarter: true });
+        if (!hasGame) alerts.push({ league: l.nickname, name: playerName(p, pid), detail: "Bye", kind: "bye", isStarter: true, isManaged });
       }
     });
   });
@@ -1649,7 +1662,10 @@ function renderDashboard() {
     `));
   }
 
-  const alerts = computeStarterAlerts().sort((a, b) => (b.isStarter - a.isStarter));
+  const alerts = computeStarterAlerts().sort((a, b) => {
+    const rank = x => (x.isManaged && x.isStarter) ? 2 : (x.isStarter ? 1 : 0);
+    return rank(b) - rank(a);
+  });
   const playersCache = getPlayersCache();
   if (leagues.some(l => myTeamFor(l))) {
     wrap.appendChild(el(`
@@ -1663,7 +1679,7 @@ function renderDashboard() {
         </div>
         ${alerts.length ? alerts.map(a => `
             <div class="prow" style="justify-content:space-between;">
-              <span>${escapeHtml(a.name)} <span class="muted">(${escapeHtml(a.league)})</span>${!a.isStarter ? ' <span class="muted" style="font-size:10px;">bench</span>' : ''}</span>
+              <span>${escapeHtml(a.name)} <span class="muted">(${escapeHtml(a.league)})</span>${a.isManaged ? ` <span class="pbadge" style="background:${a.isStarter ? 'var(--loss)' : 'var(--text-faint)'};">MANAGED${a.isStarter ? ' - IN LINEUP' : ''}</span>` : ''}${!a.isStarter && !a.isManaged ? ' <span class="muted" style="font-size:10px;">bench</span>' : ''}</span>
               <span class="pbadge" style="background:${a.kind==='bye' ? 'var(--text-faint)' : 'var(--gold)'};">${escapeHtml(a.detail)}</span>
             </div>`).join("") : ""}
       </div>
@@ -4046,6 +4062,31 @@ window.loadDashboardExtras = async function () {
       if (!STATE.matchupsCache[l.id]) {
         try { STATE.matchupsCache[l.id] = await fetchJSON(`${SLEEPER}/league/${l.id}/matchups/${week}`) || []; }
         catch (e) { STATE.matchupsCache[l.id] = []; }
+      }
+    }
+
+    // Best ball leagues: "starters" isn't a fixed user choice, it's whatever
+    // Sleeper's own live-optimal lineup currently is - fetch each rostered
+    // player's actual points so computeBestBallStarters can work out who's
+    // really starting right now, same as Matchup Detail does.
+    STATE.matchupPlayerPoints = STATE.matchupPlayerPoints || {};
+    for (const l of leagues) {
+      const data = getLeagueData(l.id);
+      if (!data || data.league.settings?.best_ball !== 1) continue;
+      const rosterId = myTeamFor(l);
+      const roster = data.rosters.find(r => String(r.roster_id) === String(rosterId));
+      if (!roster) continue;
+      const ids = (roster.players || []).filter(id => id && id !== "0");
+      for (const id of ids) {
+        const key = `${id}-${week}`;
+        const cached = STATE.matchupPlayerPoints[key];
+        if (cached !== undefined && cached !== null && Date.now() - (cached._fetchedAt || 0) < 30000) continue;
+        try {
+          const statRes = await fetch(`https://api.sleeper.com/stats/nfl/player/${id}?season_type=regular&season=${state.season}&week=${week}`);
+          STATE.matchupPlayerPoints[key] = { stat: statRes.ok ? await statRes.json() : null, proj: null, _fetchedAt: Date.now() };
+        } catch (e) {
+          STATE.matchupPlayerPoints[key] = { stat: null, proj: null, _fetchedAt: Date.now() };
+        }
       }
     }
   } catch (e) { console.error("Dashboard extras failed", e); }
