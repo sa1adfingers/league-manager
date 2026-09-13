@@ -1568,14 +1568,16 @@ function computeStarterAlerts() {
     const rosterId = myTeamFor(l);
     const roster = data.rosters.find(r => String(r.roster_id) === String(rosterId));
     if (!roster) return;
+    const starterSet = new Set((roster.starters || []).filter(id => id && id !== "0"));
     // Injury status covers the whole roster, not just starters - an OUT
-    // bench player is still worth knowing about (trade/drop decisions etc).
+    // bench player is still worth knowing about (trade/drop decisions etc),
+    // but tagged separately so it doesn't read as urgent the way a starter does.
     (roster.players || []).forEach(pid => {
       if (!pid || pid === "0") return;
       const p = PLAYERS ? PLAYERS[pid] : null;
       if (!p) return;
       if (["NA", "Doubtful", "Out"].includes(p.injury_status)) {
-        alerts.push({ league: l.nickname, name: playerName(p, pid), detail: p.injury_status, kind: "status" });
+        alerts.push({ league: l.nickname, name: playerName(p, pid), detail: p.injury_status, kind: "status", isStarter: starterSet.has(pid) });
       }
     });
     // Bye-week alerts stay starters-only - a benched player on bye doesn't
@@ -1587,7 +1589,7 @@ function computeStarterAlerts() {
       if (!p) return;
       if (p.team && STATE.nflSchedule && STATE.nflSchedule.length) {
         const hasGame = STATE.nflSchedule.some(g => g.week === STATE.dashboardWeek && (g.home === p.team || g.away === p.team));
-        if (!hasGame) alerts.push({ league: l.nickname, name: playerName(p, pid), detail: "Bye", kind: "bye" });
+        if (!hasGame) alerts.push({ league: l.nickname, name: playerName(p, pid), detail: "Bye", kind: "bye", isStarter: true });
       }
     });
   });
@@ -1647,14 +1649,14 @@ function renderDashboard() {
     `));
   }
 
-  const alerts = computeStarterAlerts();
+  const alerts = computeStarterAlerts().sort((a, b) => (b.isStarter - a.isStarter));
   if (alerts.length > 0) {
     wrap.appendChild(el(`
       <div class="panel" style="padding:12px 14px; margin-top:16px; border-color:var(--loss);">
         <div style="font-size:11px; font-weight:700; color:var(--loss); letter-spacing:0.06em; margin-bottom:6px;">LINEUP ALERTS - WEEK ${STATE.dashboardWeek || "?"}</div>
         ${alerts.map(a => `
           <div class="prow" style="justify-content:space-between;">
-            <span>${escapeHtml(a.name)} <span class="muted">(${escapeHtml(a.league)})</span></span>
+            <span>${escapeHtml(a.name)} <span class="muted">(${escapeHtml(a.league)})</span>${!a.isStarter ? ' <span class="muted" style="font-size:10px;">bench</span>' : ''}</span>
             <span class="pbadge" style="background:${a.kind==='bye' ? 'var(--text-faint)' : 'var(--gold)'};">${escapeHtml(a.detail)}</span>
           </div>`).join("")}
       </div>
