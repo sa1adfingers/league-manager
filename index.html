@@ -320,6 +320,26 @@ async function cloudDeleteLeague(id) {
 }
 
 /* =========================================================
+   WATCH LIST - a single row (id "main") holding the whole list
+   as one jsonb array, synced the same way leagues are. Deliberately
+   public-read (see SQL comment) so it can be checked from any future
+   conversation via a plain fetch, while writes stay passphrase-protected.
+========================================================= */
+function getWatchlist() { return DB.get("watchlist", []); }
+function saveWatchlistLocal(list) { DB.set("watchlist", list); }
+async function cloudPullWatchlist() {
+  const rows = await cloudFetch("watchlist?id=eq.main&select=*");
+  return (rows && rows[0] && rows[0].players) || [];
+}
+async function cloudPushWatchlist(players) {
+  await cloudFetch("watchlist?on_conflict=id", {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates" },
+    body: JSON.stringify([{ id: "main", players, updated_at: Date.now() }])
+  });
+}
+
+/* =========================================================
    SLEEPER API
 ========================================================= */
 let NFL_STATE = null;
@@ -709,6 +729,7 @@ let STATE = {
   waiverTargetsLeagueId: null,
   manualEditorOpen: {},
   bestBallAlertsOpen: false,
+  watchlistPulled: false,
   manualRosterOpen: {},
   manualRosterResult: {},
   waiverTargetsData: null,
@@ -1210,6 +1231,13 @@ window.goMatchups = function () {
   navigate("matchups");
   if (STATE.matchupWeek === null) loadMatchups();
 };
+window.goWatchList = function () {
+  navigate("watchlist");
+  if (getCloudConfig() && !STATE.watchlistPulled) {
+    STATE.watchlistPulled = true;
+    syncWatchlist();
+  }
+};
 window.setMatchupsMyOnly = function (v) {
   STATE.matchupsMyOnly = v;
   render();
@@ -1458,6 +1486,7 @@ function render() {
   else if (STATE.route === "sync") body = renderSync();
   else if (STATE.route === "league") body = renderLeagueDetail();
   else if (STATE.route === "finder") body = renderFinder();
+  else if (STATE.route === "watchlist") body = renderWatchList();
   else if (STATE.route === "compare") body = renderCompare();
   else if (STATE.route === "matchups") body = renderMatchups();
   else if (STATE.route === "matchupdetail") body = renderMatchupDetail();
@@ -1552,6 +1581,7 @@ function renderHeader() {
         <button class="nav-btn ${STATE.route==='trending'?'active':''}" onclick="goTrending()">Trending</button>
         <button class="nav-btn ${STATE.route==='transactions'?'active':''}" onclick="goTransactions()">Transactions</button>
         <button class="nav-btn ${STATE.route==='finder'?'active':''}" onclick="navigate('finder')">Player Finder</button>
+        <button class="nav-btn ${STATE.route==='watchlist'?'active':''}" onclick="goWatchList()">Watch List</button>
         <button class="nav-btn ${STATE.route==='exposure'?'active':''}" onclick="navigate('exposure')">Exposure</button>
         <button class="nav-btn ${STATE.route==='compare'?'active':''}" onclick="navigate('compare')">Compare Rosters</button>
         <button class="nav-btn ${STATE.route==='draft'?'active':''}" onclick="goDraft()">Live Draft</button>
@@ -2136,6 +2166,110 @@ function rosterCardHtml(roster, users, slots, league, myRosterId) {
 /* =========================================================
    RENDER: PLAYER FINDER (cross-league)
 ========================================================= */
+/* =========================================================
+   WATCH LIST - simple player tracker, name-matched against
+   Sleeper's player database (same infra as manual roster entry)
+   so it gets real position/team badges when it can, with a
+   free-text fallback when a name doesn't match.
+========================================================= */
+function renderWatchList() {
+  const wrap = document.createElement("div");
+  const players = getWatchlist();
+
+  wrap.appendChild(el(`
+    <div class="panel" style="padding:14px; margin-top:16px;">
+      <div class="row" style="gap:8px; flex-wrap:wrap;">
+        <input id="wl-name" type="text" placeholder="Player name" style="flex:2; min-width:140px;" />
+        <input id="wl-note" type="text" placeholder="Note (optional)" style="flex:2; min-width:140px;" />
+        <button class="btn btn-sm btn-primary" onclick="addWatchlistPlayer()">Add</button>
+      </div>
+      <div id="wl-add-result" class="muted" style="font-size:11px; margin-top:6px;"></div>
+    </div>
+  `));
+
+  wrap.appendChild(el(`
+    <div class="row" style="justify-content:space-between; margin-top:14px; align-items:center;">
+      <span class="muted" style="font-size:11px;">${players.length} player${players.length===1?"":"s"} - publicly readable so it can be checked from any conversation, only editable here</span>
+      <button class="btn btn-sm" onclick="syncWatchlist()" ${STATE.loading?"disabled":""}>${STATE.loading ? '<span class="spinner"></span>' : ''} Sync now</button>
+    </div>
+  `));
+
+  if (players.length === 0) {
+    wrap.appendChild(el(`<div class="empty-state"><p>No players yet. Add one above.</p></div>`));
+    return wrap;
+  }
+
+  const panel = document.createElement("div");
+  panel.className = "panel";
+  panel.style.marginTop = "10px";
+  panel.innerHTML = players.slice().reverse().map(p => {
+    const resolved = p.id && PLAYERS ? PLAYERS[p.id] : null;
+    const badge = resolved ? badgeInfo(resolved) : { label: p.pos || "?", color: "var(--text-faint)" };
+    const teamText = resolved ? resolved.team : p.team;
+    return `
+      <div class="prow" style="justify-content:space-between; align-items:flex-start;">
+        <span>
+          <span class="pbadge" style="background:${badge.color};">${escapeHtml(badge.label)}</span>
+          ${escapeHtml(p.name)} ${teamText ? `<span class="muted">(${escapeHtml(teamText)})</span>` : ""}
+          ${p.note ? `<div class="muted" style="font-size:11px; font-style:italic; margin-top:2px;">${escapeHtml(p.note)}</div>` : ""}
+        </span>
+        <button class="btn btn-sm btn-danger" onclick="removeWatchlistPlayer('${p.added}')">Remove</button>
+      </div>`;
+  }).join("");
+  wrap.appendChild(panel);
+  return wrap;
+}
+
+window.addWatchlistPlayer = async function () {
+  const nameInput = document.getElementById("wl-name");
+  const noteInput = document.getElementById("wl-note");
+  const resultEl = document.getElementById("wl-add-result");
+  const name = (nameInput?.value || "").trim();
+  if (!name) return;
+  if (!PLAYERS) PLAYERS = await ensurePlayers(false);
+
+  const matchedId = matchPlayerByName(name);
+  const entry = {
+    id: matchedId || null,
+    name: matchedId && PLAYERS[matchedId] ? playerName(PLAYERS[matchedId], matchedId) : name,
+    pos: matchedId ? "" : "",
+    team: matchedId ? "" : "",
+    note: (noteInput?.value || "").trim(),
+    added: Date.now(),
+  };
+  const players = getWatchlist();
+  players.push(entry);
+  saveWatchlistLocal(players);
+  if (resultEl) resultEl.textContent = matchedId ? `Matched: ${entry.name}` : `Added "${name}" as free text - no Sleeper match found`;
+  await pushWatchlistToCloud(players);
+  render();
+};
+
+window.removeWatchlistPlayer = async function (addedTs) {
+  const players = getWatchlist().filter(p => String(p.added) !== String(addedTs));
+  saveWatchlistLocal(players);
+  await pushWatchlistToCloud(players);
+  render();
+};
+
+async function pushWatchlistToCloud(players) {
+  if (!getCloudConfig()) return;
+  try { await cloudPushWatchlist(players); }
+  catch (e) { console.error("Watch list cloud push failed", e); }
+}
+
+window.syncWatchlist = async function () {
+  await withLoading(async () => {
+    if (!getCloudConfig()) return;
+    try {
+      const cloudPlayers = await cloudPullWatchlist();
+      saveWatchlistLocal(cloudPlayers);
+    } catch (e) {
+      STATE.error = e.message;
+    }
+  });
+};
+
 function renderFinder() {
   const wrap = document.createElement("div");
   wrap.appendChild(el(`
